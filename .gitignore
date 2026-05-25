@@ -10,4 +10,3 @@ venv/
 backend/app/ml/models/
 .DS_Store
 *.egg-info/
-.github/
