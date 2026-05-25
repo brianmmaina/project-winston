@@ -7,8 +7,11 @@ import {
   triggerAgentAnalysis,
 } from "../api/client";
 import type { AgentAnalysisResult } from "../api/types.generated";
+import { BearCaseCard } from "../components/BearCaseCard";
+import { CatalystCard } from "../components/CatalystCard";
 import { OverseerCard } from "../components/OverseerCard";
 import { SubAgentAccordion } from "../components/SubAgentAccordion";
+import type { BearParsed, CatalystParsed } from "../api/types.generated";
 import { useJob } from "../hooks/useJob";
 
 function formatTs(iso: string): string {
@@ -156,6 +159,24 @@ export default function AgentAnalysisPage(): ReactElement {
               Overseer failed: {result.overseer.error}
             </div>
           ) : null}
+
+          {result.catalyst_report?.parsed?.catalyst_plays && (result.catalyst_report.parsed.catalyst_plays.length ?? 0) > 0 && (
+            <div>
+              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Catalyst Plays
+              </h2>
+              <CatalystCard data={result.catalyst_report.parsed as CatalystParsed} />
+            </div>
+          )}
+
+          {result.bear_report?.parsed?.bear_cases && Object.keys(result.bear_report.parsed.bear_cases).length > 0 && (
+            <div>
+              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Bear Cases
+              </h2>
+              <BearCaseCard data={result.bear_report.parsed as BearParsed} />
+            </div>
+          )}
 
           {result.sub_reports?.length > 0 && (
             <div>

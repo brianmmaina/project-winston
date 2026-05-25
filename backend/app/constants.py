@@ -72,3 +72,4 @@ REDIS_SIGNAL_META_KEY = "signals:meta"
 
 REDIS_AGENT_ANALYSIS_KEY = "agent:analysis:latest"
 REDIS_AGENT_META_KEY = "agent:analysis:meta"
+REDIS_DAILY_SCAN_KEY = "agent:daily_scan:latest"

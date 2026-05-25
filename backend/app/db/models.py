@@ -255,3 +255,39 @@ class PortfolioEquity(Base):
     benchmark_equity: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
     daily_return: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     turnover: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+
+
+class AgentRecommendation(Base):
+    __tablename__ = "agent_recommendations"
+    __table_args__ = (
+        Index("ix_agent_rec_run_id", "run_id"),
+        Index("ix_agent_rec_ticker", "ticker"),
+        Index("ix_agent_rec_entry_date", "entry_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    asset_class: Mapped[str | None] = mapped_column(String(16))
+    sector: Mapped[str | None] = mapped_column(String(64))
+    horizon: Mapped[str | None] = mapped_column(String(16))          # short | medium
+    final_recommendation: Mapped[str] = mapped_column(String(16), nullable=False)
+    conviction: Mapped[str | None] = mapped_column(String(16))
+    position_size_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    thesis: Mapped[str | None] = mapped_column(Text)
+    catalyst: Mapped[str | None] = mapped_column(Text)
+    catalyst_date: Mapped[date | None] = mapped_column(Date)
+    what_breaks_thesis: Mapped[str | None] = mapped_column(Text)
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    spx_entry_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    entry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    check_2w_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    check_2w_spx: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    check_2w_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    check_4w_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    check_4w_spx: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    check_4w_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    check_8w_price: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    check_8w_spx: Mapped[Decimal | None] = mapped_column(Numeric(24, 8))
+    check_8w_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

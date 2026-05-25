@@ -228,30 +228,37 @@ ALL_SUB_AGENTS: list[SubAgentSpec] = [
 ]
 
 
+_CONCURRENCY = 3  # max simultaneous Anthropic API calls (Tier-1 rate limit safety)
+
+
 async def run_sub_agent(
     spec: SubAgentSpec,
     client: anthropic.AsyncAnthropic,
     tool_context: ToolContext,
+    sem: asyncio.Semaphore,
 ) -> AgentResult:
     today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
     initial_message = (
         f"Today is {today}. Conduct your analysis for: {spec.coverage_desc}\n\n" + _STEPS
     )
-    return await run_agent(
-        client=client,
-        model=get_settings().agent_model,
-        agent_name=spec.name,
-        system_prompt=spec.system_prompt,
-        initial_message=initial_message,
-        tool_context=tool_context,
-    )
+    async with sem:
+        return await run_agent(
+            client=client,
+            model=get_settings().agent_model,
+            agent_name=spec.name,
+            system_prompt=spec.system_prompt,
+            initial_message=initial_message,
+            tool_context=tool_context,
+            max_turns=8,
+        )
 
 
 async def run_all_sub_agents(
     client: anthropic.AsyncAnthropic,
     tool_context: ToolContext,
 ) -> list[AgentResult]:
-    tasks = [run_sub_agent(spec, client, tool_context) for spec in ALL_SUB_AGENTS]
+    sem = asyncio.Semaphore(_CONCURRENCY)
+    tasks = [run_sub_agent(spec, client, tool_context, sem) for spec in ALL_SUB_AGENTS]
     raw = await asyncio.gather(*tasks, return_exceptions=True)
     results: list[AgentResult] = []
     for spec, outcome in zip(ALL_SUB_AGENTS, raw):

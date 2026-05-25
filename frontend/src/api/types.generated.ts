@@ -248,19 +248,26 @@ export interface VerifiedTrade {
   ml_signal: string;
   final_recommendation: "STRONG_BUY" | "BUY" | "HOLD" | "AVOID";
   conviction: "high" | "medium" | "low";
+  horizon?: "short" | "medium";
+  position_size_pct?: number;
   agent_consensus: "strong_agree" | "agree" | "mixed" | "disagree";
+  catalyst?: string | null;
+  catalyst_date?: string | null;
   supporting_themes: string[];
   risk_factors: string[];
+  what_breaks_thesis?: string;
   suggested_action: string;
 }
 
 export interface WatchlistItem {
   ticker: string;
   reason: string;
+  trigger?: string;
 }
 
 export interface OverseerParsed {
   market_overview: string;
+  portfolio_thesis?: string;
   verified_trades: VerifiedTrade[];
   watchlist: WatchlistItem[];
   top_risks: string[];
@@ -275,7 +282,18 @@ export interface OverseerReport {
 }
 
 export interface AgentAnalysisResult {
+  run_id?: string;
   sub_reports: SubAgentReport[];
+  catalyst_report?: {
+    text: string;
+    parsed: Partial<CatalystParsed>;
+    error: string | null;
+  };
+  bear_report?: {
+    text: string;
+    parsed: Partial<BearParsed>;
+    error: string | null;
+  };
   overseer: OverseerReport;
   generated_at: string;
   sub_agent_count: number;
@@ -287,4 +305,94 @@ export interface AgentAnalysisMeta {
   sub_agent_count: number;
   sub_agent_success_count: number;
   overseer_ok: boolean;
+}
+
+export interface CatalystPlay {
+  ticker: string;
+  catalyst_type: string;
+  catalyst_description: string;
+  catalyst_date: string | null;
+  directional_bias: "bullish" | "bearish" | "binary";
+  options_priced_in: boolean | null;
+  atm_iv_pct: number | null;
+  iv_hv_ratio: number | null;
+  setup_quality: "excellent" | "good" | "fair" | "poor";
+  rationale: string;
+}
+
+export interface CatalystParsed {
+  catalyst_plays: CatalystPlay[];
+  macro_events_next_4w: string[];
+  summary: string;
+}
+
+export interface BearCase {
+  strength: "high" | "medium" | "low";
+  key_objection: string;
+  what_breaks_thesis: string;
+  valuation_concern: string;
+  crowding_risk: string;
+  downgrade_risk: string;
+}
+
+export interface BearParsed {
+  bear_cases: Record<string, BearCase>;
+  highest_risk_picks: string[];
+  picks_to_avoid: string[];
+  summary: string;
+}
+
+export interface DailyScanAlert {
+  ticker: string;
+  severity: "high" | "medium" | "low";
+  alert: string;
+  action: "exit" | "reduce" | "hold" | "add";
+  rationale: string;
+}
+
+export interface DailyScan {
+  alerts: DailyScanAlert[];
+  portfolio_health: "healthy" | "some_concerns" | "deteriorating";
+  market_note: string;
+  scanned_at: string;
+  active_picks_count: number;
+  skipped?: boolean;
+  reason?: string;
+}
+
+export interface RecommendationRecord {
+  id: number;
+  run_id: string;
+  ticker: string;
+  sector: string | null;
+  horizon: string | null;
+  final_recommendation: string;
+  conviction: string | null;
+  position_size_pct: number | null;
+  thesis: string | null;
+  catalyst: string | null;
+  catalyst_date: string | null;
+  what_breaks_thesis: string | null;
+  entry_price: number | null;
+  entry_date: string | null;
+  return_2w_pct: number | null;
+  return_4w_pct: number | null;
+  return_8w_pct: number | null;
+  spx_return_2w_pct: number | null;
+  spx_return_4w_pct: number | null;
+  spx_return_8w_pct: number | null;
+  check_2w_date: string | null;
+  check_4w_date: string | null;
+  check_8w_date: string | null;
+}
+
+export interface PerformanceSummary {
+  total_recommendations: number;
+  avg_return_2w_pct: number | null;
+  avg_spx_return_2w_pct: number | null;
+  avg_alpha_2w_pct: number | null;
+  avg_return_4w_pct: number | null;
+  avg_spx_return_4w_pct: number | null;
+  avg_alpha_4w_pct: number | null;
+  records: RecommendationRecord[];
 }

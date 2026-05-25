@@ -11,11 +11,13 @@ import type {
   BacktestSummaryRow,
   BacktestStatsBlock,
   CommodityRow,
+  DailyScan,
   HistoryBar,
   JobStartResponse,
   JobStatus,
   MetaResponse,
   ModelStatRow,
+  PerformanceSummary,
   RefreshResponse,
   RetrainResponse,
   SignalPayload,
@@ -226,4 +228,20 @@ export async function getAgentAnalysisLatest(): Promise<AgentAnalysisResult> {
 
 export async function getAgentAnalysisMeta(): Promise<AgentAnalysisMeta> {
   return unwrapJson(http.get<AgentAnalysisMeta>("/api/agent-analysis/meta"));
+}
+
+export async function getAgentDailyScan(): Promise<DailyScan> {
+  return unwrapJson(http.get<DailyScan>("/api/agent-analysis/daily-scan"));
+}
+
+export async function triggerDailyScan(): Promise<{ status: string }> {
+  return unwrapJson(http.post<{ status: string }>("/api/agent-analysis/daily-scan"));
+}
+
+export async function getAgentPerformance(): Promise<PerformanceSummary> {
+  return unwrapJson(http.get<PerformanceSummary>("/api/agent-analysis/performance"));
+}
+
+export async function triggerOutcomeCheck(): Promise<{ status: string }> {
+  return unwrapJson(http.post<{ status: string }>("/api/agent-analysis/check-outcomes"));
 }

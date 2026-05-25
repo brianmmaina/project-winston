@@ -56,6 +56,12 @@ function tradeBorderClass(rec: string): string {
   }
 }
 
+function horizonBadge(horizon?: string): string {
+  return horizon === "short"
+    ? "bg-violet-900/50 text-violet-300"
+    : "bg-cyan-900/50 text-cyan-400";
+}
+
 function TradeCard({ trade }: { trade: VerifiedTrade }): ReactElement {
   const [expanded, setExpanded] = useState(false);
 
@@ -74,17 +80,36 @@ function TradeCard({ trade }: { trade: VerifiedTrade }): ReactElement {
           <span className={`rounded px-2 py-0.5 text-xs ${consensusBadgeClass(trade.agent_consensus)}`}>
             {trade.agent_consensus.replace("_", " ")}
           </span>
+          {trade.horizon && (
+            <span className={`rounded px-2 py-0.5 text-xs ${horizonBadge(trade.horizon)}`}>
+              {trade.horizon}-term
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-3">
+      <div className="mt-3 flex flex-wrap items-center gap-3">
         <span className="text-xs text-slate-500">
           ML: <span className={`font-mono font-semibold ${trade.ml_signal === "BUY" ? "text-emerald-400" : "text-slate-400"}`}>{trade.ml_signal}</span>
         </span>
         <span className={`text-xs font-medium ${convictionClass(trade.conviction)}`}>
           {trade.conviction} conviction
         </span>
+        {trade.position_size_pct != null && (
+          <span className="text-xs text-slate-400">
+            size: <span className="font-mono font-semibold text-emerald-500">{trade.position_size_pct}%</span>
+          </span>
+        )}
       </div>
+
+      {trade.catalyst && (
+        <div className="mt-2 rounded bg-violet-950/50 px-2 py-1.5">
+          <p className="text-xs text-violet-300">
+            <span className="font-medium">Catalyst: </span>{trade.catalyst}
+            {trade.catalyst_date && <span className="ml-2 text-violet-500">{trade.catalyst_date}</span>}
+          </p>
+        </div>
+      )}
 
       <p className="mt-3 text-sm text-slate-300">{trade.suggested_action}</p>
 
@@ -98,14 +123,19 @@ function TradeCard({ trade }: { trade: VerifiedTrade }): ReactElement {
 
       {expanded && (
         <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
+          {trade.what_breaks_thesis && (
+            <div>
+              <p className="mb-1 text-xs uppercase tracking-wide text-rose-600">Exit condition</p>
+              <p className="text-xs text-rose-300">{trade.what_breaks_thesis}</p>
+            </div>
+          )}
           {trade.supporting_themes.length > 0 && (
             <div>
               <p className="mb-1.5 text-xs uppercase tracking-wide text-slate-500">Supporting themes</p>
               <ul className="space-y-1">
                 {trade.supporting_themes.map((t, i) => (
                   <li key={i} className="flex gap-2 text-xs text-slate-300">
-                    <span className="mt-0.5 shrink-0 text-emerald-500">+</span>
-                    {t}
+                    <span className="mt-0.5 shrink-0 text-emerald-500">+</span>{t}
                   </li>
                 ))}
               </ul>
@@ -117,8 +147,7 @@ function TradeCard({ trade }: { trade: VerifiedTrade }): ReactElement {
               <ul className="space-y-1">
                 {trade.risk_factors.map((r, i) => (
                   <li key={i} className="flex gap-2 text-xs text-slate-300">
-                    <span className="mt-0.5 shrink-0 text-rose-500">-</span>
-                    {r}
+                    <span className="mt-0.5 shrink-0 text-rose-500">-</span>{r}
                   </li>
                 ))}
               </ul>
@@ -145,6 +174,13 @@ export function OverseerCard({ data }: OverseerCardProps): ReactElement {
         <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-5">
           <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Market overview</p>
           <p className="text-slate-200">{data.market_overview}</p>
+        </div>
+      )}
+
+      {data.portfolio_thesis && (
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Portfolio thesis</p>
+          <p className="text-sm text-slate-300">{data.portfolio_thesis}</p>
         </div>
       )}
 
@@ -229,7 +265,10 @@ export function OverseerCard({ data }: OverseerCardProps): ReactElement {
             {data.watchlist.map((w, i) => (
               <div key={i} className="flex gap-3 text-sm">
                 <span className="shrink-0 font-mono text-slate-400">{w.ticker}</span>
-                <span className="text-slate-400">{w.reason}</span>
+                <div>
+                  <span className="text-slate-400">{w.reason}</span>
+                  {w.trigger && <p className="mt-0.5 text-xs text-cyan-600">Trigger: {w.trigger}</p>}
+                </div>
               </div>
             ))}
           </div>

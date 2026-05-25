@@ -15,7 +15,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import desc, select
 
+from app.agents.daily_scan import run_daily_scan
 from app.constants import COMMODITIES, HORIZONS, REDIS_SIGNAL_FILTERED_KEY, REDIS_SIGNAL_META_KEY, REDIS_SIGNAL_RAW_KEY
+from app.services.recommendations_service import check_outcomes
 from app.core.config import get_settings
 from app.core.redis_client import cache_save_json
 from app.db.models import ModelRun
@@ -198,6 +200,40 @@ def build_scheduler() -> AsyncIOScheduler | None:
         weekly_stock_retrain_pipeline,
         CronTrigger(day_of_week="sat", hour=3, minute=0),
         id="weekly_stock_retrain",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    async def daily_agent_scan() -> None:
+        try:
+            await run_daily_scan()
+        except Exception:
+            LOGGER.exception("Daily agent scan failed")
+
+    async def daily_outcome_check() -> None:
+        try:
+            async with async_session_factory() as session:
+                n = await check_outcomes(session)
+            LOGGER.info("Outcome check updated %d records", n)
+        except Exception:
+            LOGGER.exception("Outcome check failed")
+
+    sched.add_job(
+        daily_agent_scan,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=0),
+        id="daily_agent_scan",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    sched.add_job(
+        daily_outcome_check,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=30),
+        id="daily_outcome_check",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
