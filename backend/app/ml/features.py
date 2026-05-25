@@ -183,10 +183,10 @@ def merge_macro_sentiment_lagged(base: pd.DataFrame, macro: pd.DataFrame, sentim
         m.index = pd.to_datetime(m.index).normalize()
         m = m.reindex(idx).sort_index().shift(1).ffill()
         for c in macro_cols:
-            out[c] = m[c] if c in m.columns else np.nan
+            out[c] = m[c].fillna(0.0) if c in m.columns else 0.0
     else:
         for c in macro_cols:
-            out[c] = np.nan
+            out[c] = 0.0
 
     sent_map = [
         ("score_1d", "sentiment_score_1d"),

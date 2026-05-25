@@ -1,5 +1,3 @@
-/** Sortable/filterable rollup of persisted vectorbt summaries (21d preferred per API). */
-
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -9,13 +7,13 @@ import type { BacktestSummaryRow } from "../api/types.generated";
 import { PageState } from "../components/PageState";
 
 function errMsg(e: unknown): string {
-  if (e instanceof ApiClientError) {
-    return e.message;
-  }
+  if (e instanceof ApiClientError) return e.message;
   return "Unexpected error";
 }
 
 type SortKey = "sharpe_ratio" | "win_rate" | "total_return" | "num_trades" | "ticker";
+
+function pct(n: number): string { return `${(n * 100).toFixed(1)}%`; }
 
 export default function BacktestReport(): ReactElement {
   const navigate = useNavigate();
@@ -30,8 +28,7 @@ export default function BacktestReport(): ReactElement {
     setLoading(true);
     setError(null);
     try {
-      const data = await getBacktestSummary();
-      setRows(data);
+      setRows(await getBacktestSummary());
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -39,124 +36,141 @@ export default function BacktestReport(): ReactElement {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const processed = useMemo(() => {
     let out = [...rows];
-    if (strictFilter) {
-      out = out.filter((r) => r.sharpe_ratio > 1.0 && r.win_rate > 0.55);
-    }
+    if (strictFilter) out = out.filter((r) => r.sharpe_ratio > 1.0 && r.win_rate > 0.55);
     out.sort((a, b) => {
       const mul = sortDir === "desc" ? -1 : 1;
-      switch (sortKey) {
-        case "ticker":
-          return mul * a.ticker.localeCompare(b.ticker);
-        default:
-          return mul * ((a[sortKey] as number) - (b[sortKey] as number));
-      }
+      if (sortKey === "ticker") return mul * a.ticker.localeCompare(b.ticker);
+      return mul * ((a[sortKey] as number) - (b[sortKey] as number));
     });
     return out;
   }, [rows, strictFilter, sortDir, sortKey]);
 
   const cycleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-    } else {
-      setSortKey(key);
-      setSortDir(key === "ticker" ? "asc" : "desc");
-    }
+    if (sortKey === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    else { setSortKey(key); setSortDir(key === "ticker" ? "asc" : "desc"); }
   };
 
+  const avgSharpe = rows.length > 0 ? (rows.reduce((s, r) => s + r.sharpe_ratio, 0) / rows.length).toFixed(2) : "—";
+  const avgWinRate = rows.length > 0 ? pct(rows.reduce((s, r) => s + r.win_rate, 0) / rows.length) : "—";
+  const totalTrades = rows.reduce((s, r) => s + r.num_trades, 0);
+
+  const Th = ({ col, label, right }: { col: SortKey; label: string; right?: boolean }) => (
+    <th
+      className={`px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant cursor-pointer hover:text-on-surface transition-colors whitespace-nowrap ${right ? "text-right" : ""}`}
+      onClick={() => cycleSort(col)}
+    >
+      {label}
+      {sortKey === col && (
+        <span className="material-symbols-outlined text-[11px] leading-none text-secondary ml-1">
+          {sortDir === "asc" ? "arrow_upward" : "arrow_downward"}
+        </span>
+      )}
+    </th>
+  );
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8">
-      <header className="mb-8 flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-center md:justify-between">
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between border-b border-outline-variant pb-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-50">Backtest report</h1>
-          <p className="mt-2 text-sm text-slate-400">Latest stored OOS-aligned vectorbt summaries.</p>
+          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Backtest Report</p>
+          <p className="font-mono text-[10px] text-on-surface-variant opacity-60 mt-0.5">
+            Out-of-sample vectorbt summaries · {rows.length} instruments
+          </p>
         </div>
-        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+        <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             checked={strictFilter}
             onChange={(e) => setStrictFilter(e.target.checked)}
-            className="rounded border-slate-600 bg-slate-900"
+            className="w-3 h-3 accent-secondary"
           />
-          Only Sharpe &gt; 1.0 and win rate &gt; 55%
+          <span className="font-mono text-[10px] font-bold tracking-[0.06em] uppercase text-on-surface-variant">
+            Sharpe &gt; 1.0 · Win &gt; 55%
+          </span>
         </label>
-      </header>
+      </div>
+
+      {!loading && rows.length > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "Avg Sharpe", value: avgSharpe },
+            { label: "Avg Win Rate", value: avgWinRate },
+            { label: "Total Trades", value: totalTrades.toLocaleString() },
+          ].map((s) => (
+            <div key={s.label} className="border border-outline-variant bg-surface-container p-4">
+              <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">{s.label}</p>
+              <p className="mt-2 font-mono text-xl font-semibold text-on-surface">{s.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       <PageState error={error} onRetry={() => void load()} emptyMessage={!loading && rows.length === 0 ? "No backtests yet." : null}>
         {loading ? (
-          <div className="animate-pulse space-y-2">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-10 rounded bg-slate-800" />
+          <div className="border border-outline-variant">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="border-b border-outline-variant px-4 py-3 flex gap-6">
+                {[60, 120, 80, 70, 70, 80, 70, 100].map((w, j) => (
+                  <div key={j} className="h-3 bg-surface-container animate-pulse rounded" style={{ width: w }} />
+                ))}
+              </div>
             ))}
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-800">
-            <table className="w-full divide-y divide-slate-800 text-left text-sm">
-              <thead className="bg-slate-900/80">
+          <div className="border border-outline-variant bg-surface-container overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="border-b border-outline-variant bg-surface-container-high">
                 <tr>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">
-                    <SortButton active={sortKey === "ticker"} label="Ticker" onClick={() => cycleSort("ticker")} />
-                  </th>
-                  <th className="px-3 py-2 text-xs text-slate-400">Name</th>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">
-                    <SortButton active={sortKey === "win_rate"} label="Win rate" onClick={() => cycleSort("win_rate")} />
-                  </th>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">
-                    <SortButton active={sortKey === "sharpe_ratio"} label="Sharpe" onClick={() => cycleSort("sharpe_ratio")} />
-                  </th>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">Max DD</th>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">
-                    <SortButton active={sortKey === "total_return"} label="Tot ret" onClick={() => cycleSort("total_return")} />
-                  </th>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">
-                    <SortButton active={sortKey === "num_trades"} label="Trades" onClick={() => cycleSort("num_trades")} />
-                  </th>
-                  <th className="px-3 py-2 font-mono text-xs text-slate-400">Run at</th>
+                  <Th col="ticker" label="Ticker" />
+                  <th className="px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant whitespace-nowrap">Name</th>
+                  <Th col="win_rate" label="Win Rate" right />
+                  <Th col="sharpe_ratio" label="Sharpe" right />
+                  <th className="px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant text-right whitespace-nowrap">Max DD</th>
+                  <Th col="total_return" label="Tot Ret" right />
+                  <Th col="num_trades" label="Trades" right />
+                  <th className="px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant whitespace-nowrap">Run At</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-900">
-                {processed.map((row) => (
-                  <tr
-                    key={`${row.ticker}-${row.horizon}`}
-                    className="cursor-pointer bg-slate-950/40 hover:bg-slate-900/80"
-                    onClick={() => navigate(`/commodity/${encodeURIComponent(row.ticker)}`)}
-                  >
-                    <td className="whitespace-nowrap px-3 py-2 font-mono text-emerald-300">{row.ticker}</td>
-                    <td className="px-3 py-2 text-slate-200">{row.name}</td>
-                    <td className="px-3 py-2 font-mono">{(row.win_rate * 100).toFixed(1)}%</td>
-                    <td className="px-3 py-2 font-mono">{row.sharpe_ratio.toFixed(2)}</td>
-                    <td className="px-3 py-2 font-mono">{row.max_drawdown.toFixed(2)}</td>
-                    <td className="px-3 py-2 font-mono">{row.total_return.toFixed(3)}</td>
-                    <td className="px-3 py-2 font-mono">{row.num_trades}</td>
-                    <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-500">{row.run_at ?? "—"}</td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-outline-variant">
+                {processed.map((row) => {
+                  const goodSharpe = row.sharpe_ratio > 1.0;
+                  const goodWin = row.win_rate > 0.55;
+                  return (
+                    <tr
+                      key={`${row.ticker}-${row.horizon}`}
+                      className="cursor-pointer hover:bg-surface-container-high transition-colors"
+                      onClick={() => navigate(`/commodity/${encodeURIComponent(row.ticker)}`)}
+                    >
+                      <td className="px-4 py-2.5 font-mono text-[13px] font-semibold text-secondary">{row.ticker}</td>
+                      <td className="px-4 py-2.5 font-mono text-[11px] text-on-surface max-w-[140px] truncate">{row.name}</td>
+                      <td className={`px-4 py-2.5 font-mono text-[12px] text-right tabular-nums ${goodWin ? "text-secondary" : "text-on-surface"}`}>
+                        {pct(row.win_rate)}
+                      </td>
+                      <td className={`px-4 py-2.5 font-mono text-[12px] text-right tabular-nums ${goodSharpe ? "text-secondary" : "text-on-surface"}`}>
+                        {row.sharpe_ratio.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-[12px] text-right tabular-nums text-error">
+                        {row.max_drawdown.toFixed(2)}
+                      </td>
+                      <td className={`px-4 py-2.5 font-mono text-[12px] text-right tabular-nums ${row.total_return > 0 ? "text-secondary" : "text-error"}`}>
+                        {row.total_return.toFixed(3)}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-[12px] text-right tabular-nums text-on-surface">{row.num_trades}</td>
+                      <td className="px-4 py-2.5 font-mono text-[10px] text-on-surface-variant whitespace-nowrap">
+                        {row.run_at ?? "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </PageState>
     </div>
-  );
-}
-
-function SortButton({
-  label,
-  onClick,
-  active,
-}: {
-  label: string;
-  onClick: () => void;
-  active: boolean;
-}): ReactElement {
-  return (
-    <button type="button" className={`${active ? "text-emerald-300" : "text-slate-400"} underline-offset-4 hover:underline`} onClick={onClick}>
-      {label}
-    </button>
   );
 }

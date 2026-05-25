@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import logging
+
+# Must be set before any torch/OpenMP import.
+# Apple Silicon has multiple libomp.dylib (Homebrew + PyTorch + sklearn) that
+# conflict during parallel barrier synchronisation — this prevents the SIGSEGV.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any

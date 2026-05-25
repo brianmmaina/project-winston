@@ -1,20 +1,20 @@
 import type { ReactElement } from "react";
 import type { CatalystParsed } from "../api/types.generated";
 
-function setupBadge(q: string): string {
+function setupClass(q: string): string {
   switch (q) {
-    case "excellent": return "bg-emerald-900/60 text-emerald-300";
-    case "good": return "bg-emerald-900/30 text-emerald-500";
-    case "fair": return "bg-amber-900/50 text-amber-400";
-    default: return "bg-slate-800 text-slate-500";
+    case "excellent": return "border-secondary/40 bg-secondary/10 text-secondary";
+    case "good": return "border-secondary/25 bg-secondary/10 text-secondary";
+    case "fair": return "border-outline-variant text-on-surface-variant";
+    default: return "border-outline-variant text-on-surface-variant";
   }
 }
 
-function biasBadge(b: string): string {
+function biasClass(b: string): string {
   switch (b) {
-    case "bullish": return "text-emerald-400";
-    case "bearish": return "text-rose-400";
-    default: return "text-amber-400";
+    case "bullish": return "text-secondary";
+    case "bearish": return "text-error";
+    default: return "text-on-surface-variant";
   }
 }
 
@@ -26,50 +26,52 @@ export function CatalystCard({ data }: CatalystCardProps): ReactElement {
   return (
     <div className="space-y-4">
       {data.summary && (
-        <p className="text-sm text-slate-300">{data.summary}</p>
+        <p className="font-mono text-[12px] text-on-surface">{data.summary}</p>
       )}
 
       {data.catalyst_plays?.length > 0 && (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.catalyst_plays.map((play, i) => (
-            <div key={i} className="rounded-xl border border-violet-900/40 bg-slate-900/70 p-4">
+            <div key={i} className="border border-outline-variant bg-surface-container-high p-4 space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-mono text-xs text-slate-500">{play.ticker}</p>
-                  <p className={`text-xs font-semibold ${biasBadge(play.directional_bias)}`}>
+                  <p className="font-mono text-[13px] font-semibold text-on-surface">{play.ticker}</p>
+                  <p className={`font-mono text-[10px] font-semibold ${biasClass(play.directional_bias)}`}>
                     {play.directional_bias} · {play.catalyst_type}
                   </p>
                 </div>
-                <span className={`rounded px-2 py-0.5 text-xs ${setupBadge(play.setup_quality)}`}>
+                <span className={`font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border ${setupClass(play.setup_quality)}`}>
                   {play.setup_quality}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-slate-300">{play.catalyst_description}</p>
+              <p className="font-mono text-[11px] text-on-surface">{play.catalyst_description}</p>
               {play.catalyst_date && (
-                <p className="mt-1 text-xs text-violet-400">{play.catalyst_date}</p>
+                <p className="font-mono text-[10px] text-on-surface-variant">{play.catalyst_date}</p>
               )}
               {play.iv_hv_ratio != null && (
-                <p className="mt-1 text-xs text-slate-500">
-                  IV/HV: <span className={play.iv_hv_ratio > 1.3 ? "text-rose-400" : play.iv_hv_ratio < 0.8 ? "text-emerald-400" : "text-slate-400"}>
+                <p className="font-mono text-[10px] text-on-surface-variant">
+                  IV/HV: <span className={play.iv_hv_ratio > 1.3 ? "text-error" : play.iv_hv_ratio < 0.8 ? "text-secondary" : "text-on-surface-variant"}>
                     {play.iv_hv_ratio}x
                   </span>
-                  {play.options_priced_in === true && <span className="ml-2 text-rose-500">priced in</span>}
-                  {play.options_priced_in === false && <span className="ml-2 text-emerald-500">not priced in</span>}
+                  {play.options_priced_in === true && <span className="ml-2 text-error">priced in</span>}
+                  {play.options_priced_in === false && <span className="ml-2 text-secondary">not priced in</span>}
                 </p>
               )}
-              <p className="mt-2 text-xs text-slate-500 italic">{play.rationale}</p>
+              {play.rationale && (
+                <p className="font-mono text-[10px] text-on-surface-variant italic">{play.rationale}</p>
+              )}
             </div>
           ))}
         </div>
       )}
 
       {data.macro_events_next_4w?.length > 0 && (
-        <div>
-          <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Macro events next 4 weeks</p>
-          <ul className="space-y-1">
+        <div className="border border-outline-variant bg-surface-container p-4">
+          <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-3">Macro Events Next 4 Weeks</p>
+          <ul className="space-y-1.5">
             {data.macro_events_next_4w.map((e, i) => (
-              <li key={i} className="text-xs text-slate-400">
-                <span className="mr-2 text-slate-600">·</span>{e}
+              <li key={i} className="flex gap-2 font-mono text-[11px] text-on-surface">
+                <span className="text-on-surface-variant shrink-0">·</span>{e}
               </li>
             ))}
           </ul>

@@ -1,11 +1,11 @@
 import type { ReactElement } from "react";
 import type { BearParsed } from "../api/types.generated";
 
-function strengthColor(s: string): string {
+function strengthClass(s: string): string {
   switch (s) {
-    case "high": return "text-rose-400";
-    case "medium": return "text-amber-400";
-    default: return "text-slate-500";
+    case "high": return "text-error";
+    case "medium": return "text-on-surface-variant";
+    default: return "text-on-surface-variant opacity-60";
   }
 }
 
@@ -19,39 +19,47 @@ export function BearCaseCard({ data }: BearCaseCardProps): ReactElement {
   return (
     <div className="space-y-4">
       {data.summary && (
-        <p className="text-sm text-slate-300">{data.summary}</p>
+        <p className="font-mono text-[12px] text-on-surface">{data.summary}</p>
       )}
 
       {data.picks_to_avoid?.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          <p className="w-full text-xs uppercase tracking-wide text-rose-600">Avoid</p>
-          {data.picks_to_avoid.map((t) => (
-            <span key={t} className="rounded bg-rose-950/50 px-2 py-0.5 font-mono text-xs text-rose-400">
-              {t}
-            </span>
-          ))}
+        <div className="border border-error/20 bg-error/5 px-4 py-3">
+          <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-error mb-2">Picks to Avoid</p>
+          <div className="flex flex-wrap gap-2">
+            {data.picks_to_avoid.map((t) => (
+              <span key={t} className="font-mono text-[11px] font-semibold text-error border border-error/30 px-2 py-0.5">
+                {t}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
       {cases.length > 0 && (
         <div className="space-y-3">
           {cases.map(([ticker, bc]) => (
-            <div key={ticker} className="rounded-xl border border-rose-900/30 bg-slate-900/60 p-4">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs text-slate-400">{ticker}</span>
-                <span className={`text-xs font-semibold ${strengthColor(bc.strength)}`}>
+            <div key={ticker} className="border border-error/20 bg-surface-container-high p-4 space-y-2">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[13px] font-semibold text-on-surface">{ticker}</span>
+                <span className={`font-mono text-[10px] font-bold ${strengthClass(bc.strength)}`}>
                   {bc.strength} risk
                 </span>
               </div>
-              <p className="mt-2 text-sm text-rose-300">{bc.key_objection}</p>
+              <p className="font-mono text-[12px] text-error">{bc.key_objection}</p>
               {bc.valuation_concern && (
-                <p className="mt-1 text-xs text-slate-500"><span className="text-slate-600">Valuation: </span>{bc.valuation_concern}</p>
+                <p className="font-mono text-[11px] text-on-surface-variant">
+                  <span className="font-bold">Valuation: </span>{bc.valuation_concern}
+                </p>
               )}
               {bc.what_breaks_thesis && (
-                <p className="mt-1 text-xs text-slate-500"><span className="text-slate-600">Breaks if: </span>{bc.what_breaks_thesis}</p>
+                <p className="font-mono text-[11px] text-on-surface-variant">
+                  <span className="font-bold">Breaks if: </span>{bc.what_breaks_thesis}
+                </p>
               )}
               {bc.crowding_risk && (
-                <p className="mt-1 text-xs text-slate-500"><span className="text-slate-600">Crowding: </span>{bc.crowding_risk}</p>
+                <p className="font-mono text-[11px] text-on-surface-variant">
+                  <span className="font-bold">Crowding: </span>{bc.crowding_risk}
+                </p>
               )}
             </div>
           ))}

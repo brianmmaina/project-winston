@@ -4,138 +4,95 @@ import type { OverseerParsed, VerifiedTrade } from "../api/types.generated";
 
 function recoBadgeClass(rec: string): string {
   switch (rec) {
-    case "STRONG_BUY":
-      return "bg-emerald-600 text-emerald-50";
-    case "BUY":
-      return "bg-emerald-900/70 text-emerald-300";
-    case "HOLD":
-      return "bg-slate-800 text-slate-400";
-    case "AVOID":
-      return "bg-rose-900/70 text-rose-300";
-    default:
-      return "bg-slate-800 text-slate-400";
+    case "STRONG_BUY": return "border-secondary/40 bg-secondary/20 text-secondary";
+    case "BUY": return "border-secondary/30 bg-secondary/10 text-secondary";
+    case "AVOID": return "border-error/30 bg-error/10 text-error";
+    default: return "border-outline-variant text-on-surface-variant";
   }
 }
 
-function convictionClass(conviction: string): string {
-  switch (conviction) {
-    case "high":
-      return "text-slate-100";
-    case "medium":
-      return "text-slate-400";
-    default:
-      return "text-slate-600";
-  }
-}
-
-function consensusBadgeClass(consensus: string): string {
+function consensusClass(consensus: string): string {
   switch (consensus) {
-    case "strong_agree":
-      return "bg-emerald-900/50 text-emerald-400";
-    case "agree":
-      return "bg-emerald-900/30 text-emerald-500";
-    case "mixed":
-      return "bg-amber-900/50 text-amber-400";
-    case "disagree":
-      return "bg-rose-900/50 text-rose-400";
-    default:
-      return "bg-slate-800 text-slate-500";
+    case "strong_agree": return "text-secondary";
+    case "agree": return "text-secondary/80";
+    case "mixed": return "text-on-surface-variant";
+    case "disagree": return "text-error";
+    default: return "text-on-surface-variant";
   }
-}
-
-function tradeBorderClass(rec: string): string {
-  switch (rec) {
-    case "STRONG_BUY":
-      return "border-emerald-700/60";
-    case "BUY":
-      return "border-emerald-900/60";
-    case "AVOID":
-      return "border-rose-900/60";
-    default:
-      return "border-slate-800";
-  }
-}
-
-function horizonBadge(horizon?: string): string {
-  return horizon === "short"
-    ? "bg-violet-900/50 text-violet-300"
-    : "bg-cyan-900/50 text-cyan-400";
 }
 
 function TradeCard({ trade }: { trade: VerifiedTrade }): ReactElement {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className={`rounded-xl border ${tradeBorderClass(trade.final_recommendation)} bg-slate-900/70 p-4`}>
-      <div className="flex items-start justify-between gap-3">
+    <div className="border border-outline-variant bg-surface-container-high p-4 space-y-3">
+      <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="font-mono text-xs text-slate-500">{trade.ticker}</p>
-          <p className="text-sm font-medium text-slate-300">{trade.sector}</p>
-          <p className="mt-0.5 text-xs text-slate-500 capitalize">{trade.asset_class}</p>
+          <p className="font-mono text-[13px] font-semibold text-on-surface">{trade.ticker}</p>
+          <p className="font-mono text-[10px] text-on-surface-variant mt-0.5">{trade.sector} · {trade.asset_class}</p>
         </div>
-        <div className="flex flex-col items-end gap-1.5">
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${recoBadgeClass(trade.final_recommendation)}`}>
+        <div className="flex flex-col items-end gap-1">
+          <span className={`font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border ${recoBadgeClass(trade.final_recommendation)}`}>
             {trade.final_recommendation.replace("_", " ")}
           </span>
-          <span className={`rounded px-2 py-0.5 text-xs ${consensusBadgeClass(trade.agent_consensus)}`}>
-            {trade.agent_consensus.replace("_", " ")}
-          </span>
           {trade.horizon && (
-            <span className={`rounded px-2 py-0.5 text-xs ${horizonBadge(trade.horizon)}`}>
-              {trade.horizon}-term
-            </span>
+            <span className="font-mono text-[9px] text-on-surface-variant">{trade.horizon}-term</span>
           )}
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <span className="text-xs text-slate-500">
-          ML: <span className={`font-mono font-semibold ${trade.ml_signal === "BUY" ? "text-emerald-400" : "text-slate-400"}`}>{trade.ml_signal}</span>
+      <div className="flex flex-wrap items-center gap-3 border-t border-outline-variant pt-2">
+        <span className="font-mono text-[10px] text-on-surface-variant">
+          ML: <span className={trade.ml_signal === "BUY" ? "text-secondary font-semibold" : "text-on-surface-variant"}>{trade.ml_signal}</span>
         </span>
-        <span className={`text-xs font-medium ${convictionClass(trade.conviction)}`}>
-          {trade.conviction} conviction
+        <span className={`font-mono text-[10px] ${consensusClass(trade.agent_consensus)}`}>
+          {trade.agent_consensus.replace("_", " ")}
         </span>
         {trade.position_size_pct != null && (
-          <span className="text-xs text-slate-400">
-            size: <span className="font-mono font-semibold text-emerald-500">{trade.position_size_pct}%</span>
+          <span className="font-mono text-[10px] text-on-surface-variant">
+            size: <span className="text-secondary font-semibold">{trade.position_size_pct}%</span>
           </span>
         )}
+        <span className="font-mono text-[10px] text-on-surface-variant">{trade.conviction} conviction</span>
       </div>
 
       {trade.catalyst && (
-        <div className="mt-2 rounded bg-violet-950/50 px-2 py-1.5">
-          <p className="text-xs text-violet-300">
-            <span className="font-medium">Catalyst: </span>{trade.catalyst}
-            {trade.catalyst_date && <span className="ml-2 text-violet-500">{trade.catalyst_date}</span>}
+        <div className="border border-outline-variant bg-surface-container px-3 py-2">
+          <p className="font-mono text-[10px] text-on-surface-variant">
+            <span className="font-bold uppercase tracking-[0.06em]">Catalyst: </span>{trade.catalyst}
+            {trade.catalyst_date && <span className="ml-2 opacity-60">{trade.catalyst_date}</span>}
           </p>
         </div>
       )}
 
-      <p className="mt-3 text-sm text-slate-300">{trade.suggested_action}</p>
+      <p className="font-mono text-[11px] text-on-surface">{trade.suggested_action}</p>
 
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="mt-3 text-xs text-slate-500 hover:text-slate-300"
+        className="font-mono text-[10px] text-on-surface-variant hover:text-on-surface transition-colors flex items-center gap-1"
       >
+        <span className="material-symbols-outlined text-[12px] leading-none">
+          {expanded ? "expand_less" : "expand_more"}
+        </span>
         {expanded ? "Hide detail" : "Show detail"}
       </button>
 
       {expanded && (
-        <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
+        <div className="space-y-3 border-t border-outline-variant pt-3">
           {trade.what_breaks_thesis && (
             <div>
-              <p className="mb-1 text-xs uppercase tracking-wide text-rose-600">Exit condition</p>
-              <p className="text-xs text-rose-300">{trade.what_breaks_thesis}</p>
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-error mb-1">Exit Condition</p>
+              <p className="font-mono text-[11px] text-error/80">{trade.what_breaks_thesis}</p>
             </div>
           )}
           {trade.supporting_themes.length > 0 && (
             <div>
-              <p className="mb-1.5 text-xs uppercase tracking-wide text-slate-500">Supporting themes</p>
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-on-surface-variant mb-2">Supporting Themes</p>
               <ul className="space-y-1">
                 {trade.supporting_themes.map((t, i) => (
-                  <li key={i} className="flex gap-2 text-xs text-slate-300">
-                    <span className="mt-0.5 shrink-0 text-emerald-500">+</span>{t}
+                  <li key={i} className="flex gap-2 font-mono text-[11px] text-on-surface">
+                    <span className="text-secondary shrink-0">+</span>{t}
                   </li>
                 ))}
               </ul>
@@ -143,11 +100,11 @@ function TradeCard({ trade }: { trade: VerifiedTrade }): ReactElement {
           )}
           {trade.risk_factors.length > 0 && (
             <div>
-              <p className="mb-1.5 text-xs uppercase tracking-wide text-slate-500">Risk factors</p>
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-on-surface-variant mb-2">Risk Factors</p>
               <ul className="space-y-1">
                 {trade.risk_factors.map((r, i) => (
-                  <li key={i} className="flex gap-2 text-xs text-slate-300">
-                    <span className="mt-0.5 shrink-0 text-rose-500">-</span>{r}
+                  <li key={i} className="flex gap-2 font-mono text-[11px] text-on-surface">
+                    <span className="text-error shrink-0">-</span>{r}
                   </li>
                 ))}
               </ul>
@@ -169,44 +126,42 @@ export function OverseerCard({ data }: OverseerCardProps): ReactElement {
   const avoids = data.verified_trades?.filter((t) => t.final_recommendation === "AVOID") ?? [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {data.market_overview && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-5">
-          <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Market overview</p>
-          <p className="text-slate-200">{data.market_overview}</p>
+        <div className="border border-outline-variant bg-surface-container p-4">
+          <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-2">Market Overview</p>
+          <p className="font-mono text-[12px] text-on-surface leading-relaxed">{data.market_overview}</p>
         </div>
       )}
 
       {data.portfolio_thesis && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Portfolio thesis</p>
-          <p className="text-sm text-slate-300">{data.portfolio_thesis}</p>
+        <div className="border border-outline-variant bg-surface-container p-4">
+          <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-2">Portfolio Thesis</p>
+          <p className="font-mono text-[12px] text-on-surface leading-relaxed">{data.portfolio_thesis}</p>
         </div>
       )}
 
       {(data.top_risks?.length > 0 || data.cross_asset_themes?.length > 0) && (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2">
           {data.top_risks?.length > 0 && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-              <p className="mb-3 text-xs uppercase tracking-wide text-slate-500">Top risks</p>
+            <div className="border border-outline-variant bg-surface-container p-4">
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-3">Top Risks</p>
               <ul className="space-y-2">
                 {data.top_risks.map((r, i) => (
-                  <li key={i} className="flex gap-2 text-sm text-slate-300">
-                    <span className="mt-0.5 shrink-0 text-rose-500">-</span>
-                    {r}
+                  <li key={i} className="flex gap-2 font-mono text-[11px] text-on-surface">
+                    <span className="text-error shrink-0">-</span>{r}
                   </li>
                 ))}
               </ul>
             </div>
           )}
           {data.cross_asset_themes?.length > 0 && (
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-              <p className="mb-3 text-xs uppercase tracking-wide text-slate-500">Cross-asset themes</p>
+            <div className="border border-outline-variant bg-surface-container p-4">
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-3">Cross-Asset Themes</p>
               <ul className="space-y-2">
                 {data.cross_asset_themes.map((t, i) => (
-                  <li key={i} className="flex gap-2 text-sm text-slate-300">
-                    <span className="mt-0.5 shrink-0 text-cyan-500">*</span>
-                    {t}
+                  <li key={i} className="flex gap-2 font-mono text-[11px] text-on-surface">
+                    <span className="text-secondary shrink-0">*</span>{t}
                   </li>
                 ))}
               </ul>
@@ -219,39 +174,25 @@ export function OverseerCard({ data }: OverseerCardProps): ReactElement {
         <div className="space-y-4">
           {buys.length > 0 && (
             <div>
-              <p className="mb-3 text-xs uppercase tracking-wide text-slate-500">
-                Buy signals ({buys.length})
-              </p>
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-secondary mb-3">Buy Signals ({buys.length})</p>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {buys.map((t) => (
-                  <TradeCard key={t.ticker} trade={t} />
-                ))}
+                {buys.map((t) => <TradeCard key={t.ticker} trade={t} />)}
               </div>
             </div>
           )}
-
           {holds.length > 0 && (
             <div>
-              <p className="mb-3 text-xs uppercase tracking-wide text-slate-500">
-                Hold ({holds.length})
-              </p>
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-3">Hold ({holds.length})</p>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {holds.map((t) => (
-                  <TradeCard key={t.ticker} trade={t} />
-                ))}
+                {holds.map((t) => <TradeCard key={t.ticker} trade={t} />)}
               </div>
             </div>
           )}
-
           {avoids.length > 0 && (
             <div>
-              <p className="mb-3 text-xs uppercase tracking-wide text-slate-500">
-                Avoid ({avoids.length})
-              </p>
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-error mb-3">Avoid ({avoids.length})</p>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {avoids.map((t) => (
-                  <TradeCard key={t.ticker} trade={t} />
-                ))}
+                {avoids.map((t) => <TradeCard key={t.ticker} trade={t} />)}
               </div>
             </div>
           )}
@@ -259,15 +200,15 @@ export function OverseerCard({ data }: OverseerCardProps): ReactElement {
       )}
 
       {data.watchlist?.length > 0 && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <p className="mb-3 text-xs uppercase tracking-wide text-slate-500">Watchlist</p>
+        <div className="border border-outline-variant bg-surface-container p-4">
+          <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant mb-3">Watchlist</p>
           <div className="space-y-2">
             {data.watchlist.map((w, i) => (
-              <div key={i} className="flex gap-3 text-sm">
-                <span className="shrink-0 font-mono text-slate-400">{w.ticker}</span>
+              <div key={i} className="flex gap-3">
+                <span className="font-mono text-[12px] font-semibold text-secondary shrink-0">{w.ticker}</span>
                 <div>
-                  <span className="text-slate-400">{w.reason}</span>
-                  {w.trigger && <p className="mt-0.5 text-xs text-cyan-600">Trigger: {w.trigger}</p>}
+                  <span className="font-mono text-[11px] text-on-surface">{w.reason}</span>
+                  {w.trigger && <p className="font-mono text-[10px] text-on-surface-variant mt-0.5">Trigger: {w.trigger}</p>}
                 </div>
               </div>
             ))}

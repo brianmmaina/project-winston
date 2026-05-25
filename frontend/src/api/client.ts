@@ -42,12 +42,12 @@ export class ApiClientError extends Error {
   }
 }
 
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) ?? "";
 
 const http = axios.create({
   baseURL: BASE,
-  timeout: 30000,
+  timeout: 120000,
   validateStatus: () => true,
 });
 

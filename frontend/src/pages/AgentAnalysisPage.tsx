@@ -6,45 +6,25 @@ import {
   getAgentAnalysisLatest,
   triggerAgentAnalysis,
 } from "../api/client";
-import type { AgentAnalysisResult } from "../api/types.generated";
+import type { AgentAnalysisResult, BearParsed, CatalystParsed, OverseerParsed } from "../api/types.generated";
 import { BearCaseCard } from "../components/BearCaseCard";
 import { CatalystCard } from "../components/CatalystCard";
 import { OverseerCard } from "../components/OverseerCard";
 import { SubAgentAccordion } from "../components/SubAgentAccordion";
-import type { BearParsed, CatalystParsed } from "../api/types.generated";
 import { useJob } from "../hooks/useJob";
 
 function formatTs(iso: string): string {
   try {
-    return new Date(iso).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
+    return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   } catch {
     return iso;
   }
 }
 
-function JobProgress({ message, state }: { message: string | null; state: string }): ReactElement {
-  const running = state === "pending" || state === "running";
+function SectionHeader({ label }: { label: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <div className="flex items-center gap-3">
-        {running && (
-          <div className="h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-emerald-400" />
-        )}
-        <div>
-          <p className="text-sm font-medium text-slate-200">
-            {state === "completed" ? "Analysis complete" : state === "failed" ? "Analysis failed" : "Running analysis"}
-          </p>
-          {message && <p className="mt-0.5 text-xs text-slate-500">{message}</p>}
-        </div>
-      </div>
-      {running && (
-        <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-slate-800">
-          <div className="h-1 animate-pulse rounded-full bg-emerald-600" style={{ width: "60%" }} />
-        </div>
-      )}
+    <div className="border-b border-outline-variant pb-2 mb-4">
+      <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">{label}</p>
     </div>
   );
 }
@@ -59,8 +39,7 @@ export default function AgentAnalysisPage(): ReactElement {
 
   const fetchLatest = useCallback(async () => {
     try {
-      const data = await getAgentAnalysisLatest();
-      setResult(data);
+      setResult(await getAgentAnalysisLatest());
       setLoadError(null);
     } catch (err) {
       if (err instanceof ApiClientError && err.status === 404) {
@@ -71,22 +50,17 @@ export default function AgentAnalysisPage(): ReactElement {
     }
   }, []);
 
-  useEffect(() => {
-    void fetchLatest();
-  }, [fetchLatest]);
+  useEffect(() => { void fetchLatest(); }, [fetchLatest]);
 
   useEffect(() => {
-    if (job?.state === "completed") {
-      void fetchLatest();
-    }
+    if (job?.state === "completed") void fetchLatest();
   }, [job?.state, fetchLatest]);
 
   const onRunAnalysis = async () => {
     setTriggerError(null);
     setTriggering(true);
     try {
-      const resp = await triggerAgentAnalysis();
-      startJob(resp.job_id);
+      startJob((await triggerAgentAnalysis()).job_id);
     } catch (err) {
       setTriggerError(err instanceof Error ? err.message : "Failed to start analysis.");
     } finally {
@@ -96,18 +70,16 @@ export default function AgentAnalysisPage(): ReactElement {
 
   const isRunning = isPolling || triggering;
   const overseerParsed = result?.overseer?.parsed;
-  const hasOverseerOutput =
-    overseerParsed &&
-    (overseerParsed.market_overview || (overseerParsed.verified_trades?.length ?? 0) > 0);
+  const hasOverseer = overseerParsed && (overseerParsed.market_overview || (overseerParsed.verified_trades?.length ?? 0) > 0);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 space-y-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="p-6 space-y-6">
+      <div className="flex items-start justify-between border-b border-outline-variant pb-4">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100">Agent Analysis</h1>
+          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Agent Analysis</p>
           {result?.generated_at && (
-            <p className="mt-1 text-xs text-slate-500">
-              Last run: {formatTs(result.generated_at)} — {result.sub_agent_success_count}/{result.sub_agent_count} agents succeeded
+            <p className="font-mono text-[10px] text-on-surface-variant opacity-60 mt-0.5">
+              Last run: {formatTs(result.generated_at)} · {result.sub_agent_success_count}/{result.sub_agent_count} agents succeeded
             </p>
           )}
         </div>
@@ -116,73 +88,79 @@ export default function AgentAnalysisPage(): ReactElement {
             type="button"
             disabled={isRunning}
             onClick={() => void onRunAnalysis()}
-            className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-600 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-4 py-2 bg-secondary text-on-secondary font-mono text-[10px] font-bold tracking-[0.06em] uppercase hover:bg-secondary-fixed-dim transition-colors disabled:opacity-50"
           >
-            {isRunning ? "Running…" : "Run analysis"}
+            <span className="material-symbols-outlined text-[14px] leading-none">
+              {isRunning ? "hourglass_top" : "play_arrow"}
+            </span>
+            {isRunning ? "Running…" : "Run Analysis"}
           </button>
-          {triggerError && (
-            <p className="text-xs text-rose-400">{triggerError}</p>
-          )}
+          {triggerError && <p className="font-mono text-[10px] text-error">{triggerError}</p>}
         </div>
       </div>
 
       {job && (
-        <JobProgress message={job.message} state={job.state} />
+        <div className={`border px-4 py-3 font-mono text-[11px] flex items-center gap-3 ${
+          job.state === "failed" ? "border-error/30 bg-error/10 text-error"
+          : job.state === "completed" ? "border-secondary/30 bg-secondary/10 text-secondary"
+          : "border-outline-variant text-on-surface-variant"
+        }`}>
+          {(job.state === "pending" || job.state === "running") && (
+            <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />
+          )}
+          <span>
+            {job.state === "completed" ? "Analysis complete" : job.state === "failed" ? "Analysis failed" : "Running analysis…"}
+            {job.message ? ` — ${job.message}` : ""}
+          </span>
+        </div>
       )}
 
       {loadError && (
-        <div className="rounded-lg border border-rose-900/60 bg-rose-950/40 p-4 text-sm text-rose-300">
+        <div className="border border-error/30 bg-error/10 px-4 py-3 font-mono text-[11px] text-error">
           {loadError}
         </div>
       )}
 
       {!result && !loadError && !isRunning && (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center">
-          <p className="text-slate-400">No analysis yet.</p>
-          <p className="mt-1 text-sm text-slate-600">
-            Run an analysis to get recommendations from all 11 agents and the overseer.
+        <div className="border border-outline-variant bg-surface-container py-16 text-center">
+          <span className="material-symbols-outlined text-4xl text-on-surface-variant opacity-40">psychology</span>
+          <p className="font-mono text-[13px] text-on-surface-variant mt-3">No analysis yet.</p>
+          <p className="font-mono text-[11px] text-on-surface-variant opacity-60 mt-1">
+            Run an analysis to get recommendations from all agents and the overseer.
           </p>
         </div>
       )}
 
       {result && (
         <div className="space-y-8">
-          {hasOverseerOutput ? (
+          {hasOverseer ? (
             <div>
-              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                Overseer
-              </h2>
-              <OverseerCard data={overseerParsed!} />
+              <SectionHeader label="Overseer" />
+              <OverseerCard data={overseerParsed as OverseerParsed} />
             </div>
           ) : result.overseer?.error ? (
-            <div className="rounded-lg border border-rose-900/60 bg-rose-950/40 p-4 text-sm text-rose-300">
+            <div className="border border-error/30 bg-error/10 px-4 py-3 font-mono text-[11px] text-error">
               Overseer failed: {result.overseer.error}
             </div>
           ) : null}
 
-          {result.catalyst_report?.parsed?.catalyst_plays && (result.catalyst_report.parsed.catalyst_plays.length ?? 0) > 0 && (
+          {result.catalyst_report?.parsed?.catalyst_plays && result.catalyst_report.parsed.catalyst_plays.length > 0 && (
             <div>
-              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                Catalyst Plays
-              </h2>
+              <SectionHeader label="Catalyst Plays" />
               <CatalystCard data={result.catalyst_report.parsed as CatalystParsed} />
             </div>
           )}
 
           {result.bear_report?.parsed?.bear_cases && Object.keys(result.bear_report.parsed.bear_cases).length > 0 && (
             <div>
-              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                Bear Cases
-              </h2>
+              <SectionHeader label="Bear Cases" />
               <BearCaseCard data={result.bear_report.parsed as BearParsed} />
             </div>
           )}
 
           {result.sub_reports?.length > 0 && (
             <div>
-              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-                Sub-agents
-              </h2>
+              <SectionHeader label="Sub-Agents" />
               <SubAgentAccordion reports={result.sub_reports} />
             </div>
           )}
