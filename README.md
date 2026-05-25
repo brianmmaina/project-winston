@@ -8,12 +8,12 @@ An AI-powered multi-agent trading research platform. Multiple specialist Claude 
 
 | Layer | Status |
 |---|---|
-| ML pipeline — commodities (17 futures) | ✅ Complete |
-| ML pipeline — stocks (S&P 500 ~503 names) | ✅ Complete |
-| Data ingestion (yfinance, FRED, RSS + FinBERT) | ✅ Complete |
-| FastAPI backend + Docker | ✅ Complete |
-| React/TypeScript frontend (commodities + stocks) | ✅ Complete |
-| Multi-agent layer — backend (11 sub-agents + overseer) | ✅ Complete |
+| ML pipeline — commodities (17 futures) | Complete |
+| ML pipeline — stocks (S&P 500 ~503 names) | Complete |
+| Data ingestion (yfinance, FRED, RSS + FinBERT) | Complete |
+| FastAPI backend + Docker | Complete |
+| React/TypeScript frontend (commodities + stocks) | Complete |
+| Multi-agent layer — backend (11 sub-agents + overseer) | Complete |
 | Agent analysis UI | 🔲 Not started |
 | Agent scheduling | 🔲 Not started |
 | Agent feedback / performance tracking | 🔲 Not started |
