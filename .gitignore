@@ -1,0 +1,12 @@
+.env
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.venv-tooling/
+backend/app/ml/models/
+.DS_Store
+*.egg-info/

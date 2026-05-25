@@ -1,0 +1,11 @@
+/** Global styles: Tailwind layers and dark finance dashboard defaults. */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply min-h-screen bg-slate-950 text-slate-100 font-sans antialiased;
+  }
+}
