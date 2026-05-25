@@ -6,6 +6,8 @@
 
 import axios, { type AxiosError } from "axios";
 import type {
+  AgentAnalysisMeta,
+  AgentAnalysisResult,
   BacktestSummaryRow,
   BacktestStatsBlock,
   CommodityRow,
@@ -208,4 +210,20 @@ export async function triggerStockRefresh(): Promise<StockJobResponse> {
 
 export async function triggerStockRetrain(): Promise<StockJobResponse> {
   return unwrapJson(http.post<StockJobResponse>("/api/stocks/retrain"));
+}
+
+// ---------------------------------------------------------------------------
+// Agent analysis
+// ---------------------------------------------------------------------------
+
+export async function triggerAgentAnalysis(): Promise<JobStartResponse> {
+  return unwrapJson(http.post<JobStartResponse>("/api/agent-analysis"));
+}
+
+export async function getAgentAnalysisLatest(): Promise<AgentAnalysisResult> {
+  return unwrapJson(http.get<AgentAnalysisResult>("/api/agent-analysis/latest"));
+}
+
+export async function getAgentAnalysisMeta(): Promise<AgentAnalysisMeta> {
+  return unwrapJson(http.get<AgentAnalysisMeta>("/api/agent-analysis/meta"));
 }

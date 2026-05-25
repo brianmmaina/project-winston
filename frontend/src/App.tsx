@@ -11,6 +11,7 @@ import BacktestReport from "./pages/BacktestReport";
 import StockDetail from "./pages/StockDetail";
 import StocksDashboard from "./pages/StocksDashboard";
 import StocksPortfolio from "./pages/StocksPortfolio";
+import AgentAnalysisPage from "./pages/AgentAnalysisPage";
 import { isTimestampStale } from "./utils/stale";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -99,6 +100,9 @@ function Navigation(): ReactElement {
           <NavLink className={linkCls} to="/backtest">
             Backtest report
           </NavLink>
+          <NavLink className={linkCls} to="/agent-analysis">
+            Agent Analysis
+          </NavLink>
         </div>
       </div>
     </nav>
@@ -118,6 +122,7 @@ export default function App(): ReactElement {
         <Route path="/stocks/portfolio" element={<StocksPortfolio />} />
         <Route path="/stocks/:ticker" element={<StockDetail />} />
         <Route path="/backtest" element={<BacktestReport />} />
+        <Route path="/agent-analysis" element={<AgentAnalysisPage />} />
       </Routes>
     </BrowserRouter>
   );

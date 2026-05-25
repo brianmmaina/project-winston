@@ -210,3 +210,81 @@ export interface StockJobResponse {
   status: string;
   name: string;
 }
+
+// ---------------------------------------------------------------------------
+// Agent analysis
+// ---------------------------------------------------------------------------
+
+export interface AgentSignal {
+  ticker: string;
+  name?: string;
+  ml_signal: string;
+  agent_view: "agree" | "cautious" | "disagree" | "neutral";
+  conviction: "high" | "medium" | "low";
+  key_factors: string[];
+  risks: string[];
+}
+
+export interface SubAgentParsed {
+  agent: string;
+  summary: string;
+  signals: AgentSignal[];
+  top_picks: string[];
+  caution_flags: string[];
+  news_highlights: string[];
+}
+
+export interface SubAgentReport {
+  name: string;
+  text: string;
+  parsed: Partial<SubAgentParsed>;
+  error: string | null;
+}
+
+export interface VerifiedTrade {
+  ticker: string;
+  asset_class: string;
+  sector: string;
+  ml_signal: string;
+  final_recommendation: "STRONG_BUY" | "BUY" | "HOLD" | "AVOID";
+  conviction: "high" | "medium" | "low";
+  agent_consensus: "strong_agree" | "agree" | "mixed" | "disagree";
+  supporting_themes: string[];
+  risk_factors: string[];
+  suggested_action: string;
+}
+
+export interface WatchlistItem {
+  ticker: string;
+  reason: string;
+}
+
+export interface OverseerParsed {
+  market_overview: string;
+  verified_trades: VerifiedTrade[];
+  watchlist: WatchlistItem[];
+  top_risks: string[];
+  cross_asset_themes: string[];
+  generated_at: string;
+}
+
+export interface OverseerReport {
+  text: string;
+  parsed: Partial<OverseerParsed>;
+  error: string | null;
+}
+
+export interface AgentAnalysisResult {
+  sub_reports: SubAgentReport[];
+  overseer: OverseerReport;
+  generated_at: string;
+  sub_agent_count: number;
+  sub_agent_success_count: number;
+}
+
+export interface AgentAnalysisMeta {
+  generated_at: string;
+  sub_agent_count: number;
+  sub_agent_success_count: number;
+  overseer_ok: boolean;
+}
