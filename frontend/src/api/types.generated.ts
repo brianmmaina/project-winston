@@ -42,12 +42,30 @@ export interface SignalPayload {
   regime_confidence: number;
   consensus: boolean;
   position_size_pct: number;
+  expected_return_pct?: number;
+  downside_risk_pct?: number;
   suggested_action: string;
   sentiment: SentimentBlock;
   backtest: BacktestStatsBlock;
   shap_features: ShapFeature[];
   generated_at: string;
   correlation_filtered: boolean;
+  risk_flags?: string[];
+}
+
+export interface PortfolioRiskSummary {
+  total_exposure_pct: number;
+  commodity_exposure_pct: number;
+  equity_exposure_pct: number;
+  by_sector: Record<string, number>;
+  buy_count: number;
+  risk_flagged: string[];
+  limits: {
+    max_commodity_pct: number;
+    max_equity_pct: number;
+    max_sector_pct: number;
+    max_single_pct: number;
+  };
 }
 
 export interface CommodityRow {
@@ -143,6 +161,9 @@ export interface StockRankingRow {
   in_topk: boolean;
   horizon: string;
   last_close: number | null;
+  momentum_score?: number | null;
+  quality_score?: number | null;
+  value_score?: number | null;
 }
 
 export interface StockHoldingRow {
@@ -281,6 +302,31 @@ export interface OverseerReport {
   error: string | null;
 }
 
+export interface BullDebateResult {
+  ticker: string;
+  bull_rebuttal: string;
+  supporting_catalysts: string[];
+  risk_reward: string;
+  options_confirmation?: string;
+  verdict: "CONFIRM_BUY" | "REDUCE_CONVICTION" | "HOLD";
+  conviction: "high" | "medium" | "low";
+  summary: string;
+}
+
+export interface BearRebuttalResult {
+  ticker: string;
+  steelman_bull_case: string;
+  bull_catalysts: string[];
+  entry_price_that_works?: string;
+  verdict: "CONFIRM_AVOID" | "WATCH" | "RECONSIDER";
+  summary: string;
+}
+
+export interface DebateReport {
+  bull_debates: Record<string, Partial<BullDebateResult>>;
+  bear_rebuttals: Record<string, Partial<BearRebuttalResult>>;
+}
+
 export interface AgentAnalysisResult {
   run_id?: string;
   sub_reports: SubAgentReport[];
@@ -294,6 +340,7 @@ export interface AgentAnalysisResult {
     parsed: Partial<BearParsed>;
     error: string | null;
   };
+  debate_report?: DebateReport;
   overseer: OverseerReport;
   generated_at: string;
   sub_agent_count: number;
@@ -384,6 +431,130 @@ export interface RecommendationRecord {
   check_2w_date: string | null;
   check_4w_date: string | null;
   check_8w_date: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// COT Positioning
+// ---------------------------------------------------------------------------
+
+export interface CotPoint {
+  report_date: string;
+  comm_net: number | null;
+  spec_net: number | null;
+  spec_pct_long: number | null;
+  open_interest: number | null;
+}
+
+export interface CotResponse {
+  latest: CotPoint | null;
+  history: CotPoint[];
+}
+
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+export interface MarketAlert {
+  id: number;
+  ticker: string;
+  alert_type: "price_spike" | "weekly_move" | "position_adverse" | string;
+  severity: "high" | "medium" | "low";
+  triggered_at: string;
+  message: string;
+  price: number | null;
+  change_pct: number | null;
+  acknowledged: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Calendar
+// ---------------------------------------------------------------------------
+
+export interface EconomicEvent {
+  event_type: string;
+  event_date: string;
+  description: string;
+  impact: string;
+  forecast_value: number | null;
+  actual_value: number | null;
+}
+
+export interface EarningsEvent {
+  ticker: string;
+  earnings_date: string;
+  timing: string | null;
+  eps_estimate: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Paper trading
+// ---------------------------------------------------------------------------
+
+export interface PaperPortfolioSummary {
+  initial_capital: number;
+  current_cash: number;
+  positions_value: number;
+  total_value: number;
+  total_pnl_pct: number;
+  spx_pnl_pct: number | null;
+  alpha_pct: number | null;
+  open_positions_count: number;
+  closed_positions_count: number;
+  win_rate: number | null;
+  avg_closed_pnl_pct: number | null;
+  updated_at: string | null;
+}
+
+export interface PaperPosition {
+  id: number;
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  asset_class: string | null;
+  recommendation: string;
+  conviction: string | null;
+  thesis: string | null;
+  what_breaks_thesis: string | null;
+  entry_price: number;
+  entry_date: string | null;
+  shares: number;
+  position_size_pct: number;
+  stop_loss_price: number;
+  current_price: number;
+  unrealized_pnl_pct: number;
+  position_value: number;
+  is_open: boolean;
+  close_reason: string | null;
+  realized_pnl_pct: number | null;
+}
+
+export interface PaperTrade {
+  id: number;
+  ticker: string;
+  direction: "BUY" | "SELL";
+  price: number;
+  shares: number;
+  value: number;
+  pnl_pct: number | null;
+  reason: string;
+  traded_at: string | null;
+}
+
+export interface PaperPortfolioResponse {
+  portfolio: PaperPortfolioSummary;
+  open_positions: PaperPosition[];
+  closed_positions: PaperPosition[];
+  trades: PaperTrade[];
+}
+
+export interface PriceTriggerEvent {
+  ticker: string;
+  name: string;
+  direction: "above" | "below";
+  deviation_pct: number;
+  latest_price: number;
+  sma_20d: number;
+  triggered_at: string;
 }
 
 export interface PerformanceSummary {
