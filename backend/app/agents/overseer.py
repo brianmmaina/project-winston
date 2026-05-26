@@ -98,6 +98,9 @@ async def run_overseer(
     bear_result: AgentResult | None,
     client: anthropic.AsyncAnthropic,
     tool_context: ToolContext,
+    debate_context: dict[str, Any] | None = None,
+    risk_context: dict[str, Any] | None = None,
+    agent_calibration: dict[str, float] | None = None,
 ) -> AgentResult:
     today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
     successful = sum(1 for r in sub_results if not r.error)
@@ -111,18 +114,63 @@ async def run_overseer(
     if bear_result and not bear_result.error:
         bear_block = f"\n\nBEAR CASE AGENT REPORT:\n{bear_result.text[:2000]}"
 
+    debate_block = ""
+    if debate_context and (debate_context.get("bull_debates") or debate_context.get("bear_rebuttals")):
+        import json
+        debate_block = f"\n\nDEBATE ROUND RESULTS:\n{json.dumps(debate_context, indent=2)[:3000]}"
+        debate_block += (
+            "\n\nIMPORTANT: A debate round was run on your STRONG_BUY and AVOID calls. "
+            "Review the bull debate verdicts and bear rebuttal verdicts carefully before finalising. "
+            "If a bull debate returns REDUCE_CONVICTION, downgrade STRONG_BUY → BUY. "
+            "If a bear rebuttal returns RECONSIDER, upgrade AVOID → HOLD or BUY."
+        )
+
+    calibration_block = ""
+    if agent_calibration:
+        sorted_agents = sorted(agent_calibration.items(), key=lambda kv: kv[1], reverse=True)
+        lines = [f"  {name}: {rate*100:.1f}% pick accuracy" for name, rate in sorted_agents]
+        calibration_block = (
+            "\n\nAGENT CALIBRATION (historical pick accuracy, 2w horizon):\n"
+            + "\n".join(lines)
+            + "\nINSTRUCTION: Weight higher-accuracy agents more when their picks align. "
+            "If a low-accuracy agent is the sole advocate for a pick, treat it with more skepticism. "
+            "Use this only as a soft prior — the current reports may still override historical performance."
+        )
+
+    risk_block = ""
+    if risk_context:
+        by_sec = ", ".join(f"{k}={v*100:.1f}%" for k, v in risk_context.get("by_sector", {}).items())
+        flagged = ", ".join(risk_context.get("risk_flagged", [])) or "none"
+        risk_block = (
+            f"\n\nPORTFOLIO RISK SNAPSHOT (from ML risk layer):\n"
+            f"  Total commodity exposure: {risk_context.get('commodity_exposure_pct', 0)*100:.1f}% "
+            f"(limit {risk_context.get('limits', {}).get('max_commodity_pct', 0.4)*100:.0f}%)\n"
+            f"  Total equity exposure: {risk_context.get('equity_exposure_pct', 0)*100:.1f}% "
+            f"(limit {risk_context.get('limits', {}).get('max_equity_pct', 0.6)*100:.0f}%)\n"
+            f"  By sector: {by_sec}\n"
+            f"  Risk-flagged tickers (Kelly-adjusted): {flagged}\n"
+            f"  Active BUY signals: {risk_context.get('buy_count', 0)}\n"
+            "\nINSTRUCTION: Respect these sector and asset-class limits in your position_size_pct allocations. "
+            "Tickers listed as risk-flagged have already had their ML-derived size reduced; treat them as lower conviction."
+        )
+
     initial_message = (
         f"Today is {today}. Received reports from {successful}/{len(sub_results)} sector agents.\n\n"
         f"SECTOR AGENT REPORTS:\n{report_block}"
         f"{catalyst_block}"
-        f"{bear_block}\n\n"
+        f"{bear_block}"
+        f"{calibration_block}"
+        f"{risk_block}"
+        f"{debate_block}\n\n"
         "Your tasks:\n"
         "1. Use get_macro_indicators() to validate the macro backdrop\n"
         "2. Use get_commodity_signals() and get_stock_rankings() to spot-check any signal you want to verify\n"
         "3. Apply your portfolio construction rules — respect sector caps, theme caps, and position sizing\n"
         "4. Weight catalyst agent setups higher for short-horizon picks; weight sector agent conviction for medium-horizon\n"
         "5. Apply bear case objections — any pick flagged as 'picks_to_avoid' by the bear agent needs a strong counter-argument to include\n"
-        "6. Output the final portfolio JSON"
+        + ("6. Review debate round verdicts and adjust conviction accordingly\n"
+           "7. Output the final portfolio JSON" if debate_block else
+           "6. Output the final portfolio JSON")
     )
 
     return await run_agent(
