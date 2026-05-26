@@ -2,7 +2,8 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
-import { ApiClientError, getMeta, triggerRefresh } from "./api/client";
+import { ApiClientError, getAlerts, acknowledgeAlert, getMeta, getRawSignals, triggerRefresh } from "./api/client";
+import type { MarketAlert, SignalPayload } from "./api/types.generated";
 import CommodityDetail from "./pages/CommodityDetail";
 import Dashboard from "./pages/Dashboard";
 import BacktestReport from "./pages/BacktestReport";
@@ -13,7 +14,9 @@ import AgentAnalysisPage from "./pages/AgentAnalysisPage";
 import PerformancePage from "./pages/PerformancePage";
 import SettingsPage from "./pages/SettingsPage";
 import AgentConfigPage from "./pages/AgentConfigPage";
+import PaperTradingPage from "./pages/PaperTradingPage";
 import { isTimestampStale } from "./utils/stale";
+import { useLivePrices } from "./hooks/useLivePrices";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,6 +27,7 @@ const NAV_ITEMS = [
   { to: "/backtest", end: false, icon: "history", label: "Backtest" },
   { to: "/performance", end: false, icon: "bar_chart", label: "Performance" },
   { to: "/agent-analysis", end: false, icon: "psychology", label: "Agent Analysis" },
+  { to: "/paper-trading", end: false, icon: "science", label: "Paper Trading" },
 ];
 
 const BOTTOM_ITEMS = [
@@ -80,10 +84,76 @@ function Sidebar(): ReactElement {
   );
 }
 
-function Topbar({ stale, onRefresh, refreshing }: {
+function AlertsDropdown({ alerts, onAck }: { alerts: MarketAlert[]; onAck: (id: number) => void }): ReactElement {
+  const [open, setOpen] = useState(false);
+  const unacked = alerts.filter((a) => !a.acknowledged);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="relative flex items-center gap-1.5 px-2.5 py-1 border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline transition-colors rounded"
+      >
+        <span className="material-symbols-outlined text-[14px] leading-none">notifications</span>
+        <span className="font-mono text-[10px] uppercase tracking-widest font-bold">Alerts</span>
+        {unacked.length > 0 && (
+          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-error text-on-error text-[9px] font-mono font-bold flex items-center justify-center">
+            {unacked.length > 9 ? "9+" : unacked.length}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-9 z-50 w-96 max-h-80 overflow-y-auto bg-surface-container border border-outline-variant rounded shadow-lg">
+          <div className="px-3 py-2 border-b border-outline-variant flex items-center justify-between">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
+              Market Alerts {unacked.length > 0 && `· ${unacked.length} unread`}
+            </span>
+            <button type="button" onClick={() => setOpen(false)}>
+              <span className="material-symbols-outlined text-[14px] text-on-surface-variant">close</span>
+            </button>
+          </div>
+          {alerts.length === 0 ? (
+            <div className="px-3 py-4 text-center font-mono text-[11px] text-on-surface-variant">No recent alerts</div>
+          ) : (
+            alerts.slice(0, 20).map((a) => (
+              <div key={a.id} className={`px-3 py-2.5 border-b border-outline-variant last:border-0 ${a.acknowledged ? "opacity-50" : ""}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${a.severity === "high" ? "bg-error" : a.severity === "medium" ? "bg-warning" : "bg-secondary"}`} />
+                    <span className="font-mono text-[10px] font-bold text-on-surface">{a.ticker}</span>
+                    <span className="font-mono text-[9px] text-on-surface-variant uppercase">{a.alert_type.replace("_", " ")}</span>
+                  </div>
+                  {!a.acknowledged && (
+                    <button
+                      type="button"
+                      onClick={() => onAck(a.id)}
+                      className="shrink-0 font-mono text-[9px] text-on-surface-variant hover:text-on-surface uppercase tracking-widest"
+                    >
+                      Ack
+                    </button>
+                  )}
+                </div>
+                <p className="font-mono text-[10px] text-on-surface mt-0.5 leading-snug">{a.message}</p>
+                <p className="font-mono text-[9px] text-on-surface-variant mt-0.5">
+                  {new Date(a.triggered_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Topbar({ stale, onRefresh, refreshing, alerts, onAckAlert }: {
   stale: boolean;
   onRefresh: () => void;
   refreshing: boolean;
+  alerts: MarketAlert[];
+  onAckAlert: (id: number) => void;
 }): ReactElement {
   const location = useLocation();
   const [now, setNow] = useState(new Date());
@@ -111,6 +181,7 @@ function Topbar({ stale, onRefresh, refreshing }: {
     if (p === "/agent-analysis") return "Agent Analysis";
     if (p === "/agent-config") return "Agent Configuration";
     if (p === "/settings") return "Settings";
+    if (p === "/paper-trading") return "Paper Trading";
     return "Dashboard";
   }, [location.pathname]);
 
@@ -134,6 +205,7 @@ function Topbar({ stale, onRefresh, refreshing }: {
             </span>
           </button>
         )}
+        <AlertsDropdown alerts={alerts} onAck={onAckAlert} />
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse" />
           <span className="font-mono text-[10px] text-on-surface-variant tracking-wider">LIVE</span>
@@ -145,29 +217,43 @@ function Topbar({ stale, onRefresh, refreshing }: {
 }
 
 function Footer(): ReactElement {
-  const tickers = [
-    { label: "SPX", value: "5,892.34", chg: "+0.41%" },
-    { label: "VIX", value: "14.72", chg: "-2.31%" },
-    { label: "10Y", value: "4.418%", chg: "+0.02" },
-    { label: "DXY", value: "99.84", chg: "-0.18%" },
-    { label: "BTC", value: "108,420", chg: "+1.23%" },
-    { label: "WTI", value: "72.14", chg: "-0.54%" },
-    { label: "GOLD", value: "3,315.80", chg: "+0.37%" },
-    { label: "EUR/USD", value: "1.0812", chg: "+0.09%" },
-  ];
+  const [signals, setSignals] = useState<SignalPayload[]>([]);
+
+  useEffect(() => {
+    getRawSignals().then(setSignals).catch(() => {});
+  }, []);
+
+  const items = signals
+    .slice()
+    .sort((a, b) => b.avg_confidence - a.avg_confidence)
+    .slice(0, 12);
+
+  const tickers = items.map((s) => s.ticker);
+  const livePrices = useLivePrices(tickers);
 
   return (
     <footer className="flex items-center h-8 bg-surface-container-lowest border-t border-outline-variant px-4 gap-6 overflow-hidden shrink-0">
-      {tickers.map((t) => {
-        const positive = t.chg.startsWith("+");
-        return (
-          <div key={t.label} className="flex items-center gap-2 shrink-0">
-            <span className="font-mono text-[10px] font-bold text-on-surface-variant tracking-[0.06em]">{t.label}</span>
-            <span className="font-mono text-[11px] text-on-surface">{t.value}</span>
-            <span className={`font-mono text-[10px] ${positive ? "text-secondary" : "text-error"}`}>{t.chg}</span>
-          </div>
-        );
-      })}
+      {items.length === 0 ? (
+        <span className="font-mono text-[10px] text-on-surface-variant opacity-50">No price data — run a refresh</span>
+      ) : (
+        items.map((s) => {
+          const isBuy = s.signal === "BUY";
+          const price = livePrices[s.ticker] ?? s.current_price;
+          const isLive = livePrices[s.ticker] != null;
+          return (
+            <div key={s.ticker} className="flex items-center gap-2 shrink-0">
+              <span className="font-mono text-[10px] font-bold text-on-surface-variant tracking-[0.06em]">{s.ticker}</span>
+              <span className="font-mono text-[11px] text-on-surface flex items-center gap-1">
+                ${price.toFixed(2)}
+                {isLive && <span className="w-1 h-1 rounded-full bg-secondary animate-pulse" />}
+              </span>
+              <span className={`font-mono text-[10px] ${isBuy ? "text-secondary" : "text-on-surface-variant"}`}>
+                {s.avg_confidence.toFixed(2)}
+              </span>
+            </div>
+          );
+        })
+      )}
     </footer>
   );
 }
@@ -175,6 +261,7 @@ function Footer(): ReactElement {
 function Shell(): ReactElement {
   const [stale, setStale] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [alerts, setAlerts] = useState<MarketAlert[]>([]);
 
   const probe = useCallback(async () => {
     try {
@@ -188,7 +275,22 @@ function Shell(): ReactElement {
     }
   }, []);
 
-  useEffect(() => { void probe(); }, [probe]);
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const data = await getAlerts(50);
+      setAlerts(data);
+    } catch {
+      // alerts are non-critical
+    }
+  }, []);
+
+  useEffect(() => { void probe(); void fetchAlerts(); }, [probe, fetchAlerts]);
+
+  // Re-fetch alerts every 5 minutes
+  useEffect(() => {
+    const id = setInterval(() => { void fetchAlerts(); }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [fetchAlerts]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -200,11 +302,20 @@ function Shell(): ReactElement {
     }
   };
 
+  const onAckAlert = async (id: number) => {
+    try {
+      await acknowledgeAlert(id);
+      setAlerts((prev) => prev.map((a) => a.id === id ? { ...a, acknowledged: true } : a));
+    } catch {
+      // best-effort
+    }
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-surface">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <Topbar stale={stale} onRefresh={() => void onRefresh()} refreshing={refreshing} />
+        <Topbar stale={stale} onRefresh={() => void onRefresh()} refreshing={refreshing} alerts={alerts} onAckAlert={onAckAlert} />
         <main className="flex-1 overflow-y-auto overflow-x-hidden bg-surface">
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -218,6 +329,7 @@ function Shell(): ReactElement {
             <Route path="/performance" element={<PerformancePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/agent-config" element={<AgentConfigPage />} />
+            <Route path="/paper-trading" element={<PaperTradingPage />} />
           </Routes>
         </main>
         <Footer />
