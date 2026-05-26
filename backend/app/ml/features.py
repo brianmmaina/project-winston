@@ -210,14 +210,162 @@ def merge_macro_sentiment_lagged(base: pd.DataFrame, macro: pd.DataFrame, sentim
     return out
 
 
+def attach_cot_features(idx: pd.DatetimeIndex, cot_df: pd.DataFrame, out: pd.DataFrame) -> None:
+    """Merge weekly COT positioning into daily feature frame (forward-filled)."""
+    cot_cols = ("spec_pct_long", "comm_net", "spec_net", "open_interest")
+    if cot_df is None or cot_df.empty:
+        for c in cot_cols:
+            out[f"cot_{c}"] = 0.0
+        return
+    c = cot_df.copy()
+    c.index = pd.to_datetime(c.index).normalize()
+    c = c.reindex(idx).sort_index().shift(1).ffill()
+    for col in cot_cols:
+        if col in c.columns:
+            oi = c["open_interest"].replace(0, np.nan) if col in ("comm_net", "spec_net") and "open_interest" in c.columns else None
+            if oi is not None:
+                # Normalize net positions by open interest so scale is comparable across markets
+                out[f"cot_{col}_norm"] = (c[col] / oi).fillna(0.0)
+            out[f"cot_{col}"] = c[col].fillna(0.0)
+        else:
+            out[f"cot_{col}"] = 0.0
+
+
+def attach_cross_asset_features(idx: pd.DatetimeIndex, cross: pd.DataFrame, out: pd.DataFrame) -> None:
+    """Add log returns of cross-asset reference prices (oil, gold, copper, corn, DXY proxy)."""
+    if cross is None or cross.empty:
+        return
+    ref = cross.copy()
+    ref.index = pd.to_datetime(ref.index).normalize()
+    ref = ref.reindex(idx).sort_index().ffill()
+    for col in ref.columns:
+        s = ref[col].astype(float)
+        safe = s.replace(0, np.nan)
+        out[f"xa_{col}_ret5"] = np.log(safe / safe.shift(5)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        out[f"xa_{col}_ret21"] = np.log(safe / safe.shift(21)).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
+# USDA PSD attribute IDs that carry supply/demand signal
+_USDA_ATTR_NAMES: dict[int, str] = {
+    57: "production",
+    125: "consumption",
+    176: "ending_stocks",
+}
+
+
+def attach_usda_features(idx: pd.DatetimeIndex, usda_df: pd.DataFrame | None, out: pd.DataFrame) -> None:
+    """Merge annual USDA PSD supply/demand data into the daily feature frame (forward-filled)."""
+    feat_cols = [f"usda_{n}" for n in _USDA_ATTR_NAMES.values()]
+    yoy_cols = [f"usda_{n}_yoy" for n in _USDA_ATTR_NAMES.values()]
+    stu_col = "usda_stocks_to_use"
+    all_cols = feat_cols + yoy_cols + [stu_col]
+
+    if usda_df is None or usda_df.empty:
+        for c in all_cols:
+            out[c] = 0.0
+        return
+
+    try:
+        pivot = usda_df.pivot_table(
+            index="market_year", columns="attribute_id", values="value", aggfunc="last"
+        )
+    except Exception:
+        for c in all_cols:
+            out[c] = 0.0
+        return
+
+    daily = pd.DataFrame(index=pd.DatetimeIndex(idx))
+
+    for attr_id, name in _USDA_ATTR_NAMES.items():
+        col = f"usda_{name}"
+        yoy = f"usda_{name}_yoy"
+        if attr_id not in pivot.columns:
+            daily[col] = 0.0
+            daily[yoy] = 0.0
+            continue
+
+        s = pivot[attr_id].sort_index().dropna()
+        if s.empty:
+            daily[col] = 0.0
+            daily[yoy] = 0.0
+            continue
+
+        ts_idx = pd.to_datetime([f"{int(yr)}-01-01" for yr in s.index])
+        ts = pd.Series(s.values, index=ts_idx, dtype=float)
+
+        curr = ts.reindex(daily.index, method="ffill").fillna(0.0)
+        prev = ts.shift(1).reindex(daily.index, method="ffill").fillna(0.0)
+        base = prev.replace(0, np.nan)
+        daily[col] = curr
+        daily[yoy] = ((curr - prev) / base.abs()).clip(-5, 5).fillna(0.0)
+
+    # Stocks-to-use ratio: ending_stocks / consumption
+    sto = daily.get("usda_ending_stocks", pd.Series(0.0, index=daily.index))
+    cons = daily.get("usda_consumption", pd.Series(0.0, index=daily.index))
+    daily[stu_col] = (sto / cons.replace(0, np.nan)).clip(-10, 10).fillna(0.0)
+
+    for c in daily.columns:
+        out[c] = daily[c].values
+
+
+def attach_eia_features(idx: pd.DatetimeIndex, eia_df: pd.DataFrame | None, out: pd.DataFrame) -> None:
+    """Merge weekly EIA inventory data into the daily feature frame (forward-filled).
+
+    Features per series: absolute level and week-on-week change (normalised by
+    rolling mean so the scale is comparable across different units/commodities).
+    Only produces features for series_ids actually present in the frame.
+    """
+    if eia_df is None or eia_df.empty:
+        return
+
+    try:
+        # Pivot: index=report_date, columns=series_id, values=value
+        pivot = eia_df.pivot_table(index="report_date", columns="series_id", values="value", aggfunc="last")
+        wow_pivot = eia_df.pivot_table(index="report_date", columns="series_id", values="wow_change", aggfunc="last")
+    except Exception:
+        return
+
+    pivot.index = pd.to_datetime(pivot.index)
+    wow_pivot.index = pd.to_datetime(wow_pivot.index)
+
+    for series_id in pivot.columns:
+        # slugify series_id for column name
+        slug = series_id.replace(".", "_").replace("-", "_").lower()
+
+        s = pivot[series_id].sort_index().astype(float)
+        wow = wow_pivot[series_id].sort_index().astype(float) if series_id in wow_pivot.columns else pd.Series(dtype=float)
+
+        # Reindex weekly → daily by forward-fill, then shift 1 week to avoid look-ahead
+        curr = s.reindex(pd.DatetimeIndex(idx), method="ffill").shift(5).fillna(0.0)
+        roll_mean = s.rolling(52, min_periods=4).mean().reindex(pd.DatetimeIndex(idx), method="ffill").shift(5)
+        roll_mean_safe = roll_mean.replace(0, np.nan)
+        out[f"eia_{slug}_level"] = curr
+        out[f"eia_{slug}_norm"] = (curr / roll_mean_safe).clip(-5, 5).fillna(0.0)
+
+        if not wow.empty:
+            wow_curr = wow.reindex(pd.DatetimeIndex(idx), method="ffill").shift(5).fillna(0.0)
+            roll_std = s.rolling(52, min_periods=4).std(ddof=0).reindex(pd.DatetimeIndex(idx), method="ffill").shift(5)
+            roll_std_safe = roll_std.replace(0, np.nan)
+            out[f"eia_{slug}_wow_z"] = (wow_curr / roll_std_safe).clip(-5, 5).fillna(0.0)
+
+
 def build_base_feature_frame(
     px: pd.DataFrame,
     macro: pd.DataFrame | None,
     sentiment: pd.DataFrame | None,
+    cot: pd.DataFrame | None = None,
+    cross_asset: pd.DataFrame | None = None,
+    usda: pd.DataFrame | None = None,
+    eia: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     feats = build_price_features(px)
     attach_seasonality(px.index, feats)
     merged = merge_macro_sentiment_lagged(feats, macro if macro is not None else pd.DataFrame(), sentiment if sentiment is not None else pd.DataFrame())
+    attach_cot_features(pd.DatetimeIndex(px.index), cot if cot is not None else pd.DataFrame(), merged)
+    if cross_asset is not None and not cross_asset.empty:
+        attach_cross_asset_features(pd.DatetimeIndex(px.index), cross_asset, merged)
+    attach_usda_features(pd.DatetimeIndex(px.index), usda, merged)
+    attach_eia_features(pd.DatetimeIndex(px.index), eia, merged)
     merged["regime_label"] = 0.0
     merged["regime_confidence"] = 0.0
     return merged
