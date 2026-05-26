@@ -326,3 +326,15 @@ async def run_portfolio_backtest(
         "equity_rows": len(equity_rows),
         "holdings_rows": len(holdings_rows),
     }
+
+
+async def get_active_tickers(session: AsyncSession) -> list[str]:
+    """Return list of active stock tickers from instrument_metadata."""
+    from sqlalchemy import select
+    from app.db.models import InstrumentMetadata
+    q = await session.execute(
+        select(InstrumentMetadata.ticker)
+        .where(InstrumentMetadata.asset_class == "stock", InstrumentMetadata.is_active.is_(True))
+        .order_by(InstrumentMetadata.ticker)
+    )
+    return [row[0] for row in q.all()]
