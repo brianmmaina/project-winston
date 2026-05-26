@@ -28,12 +28,43 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean
       onClick={() => onChange(!enabled)}
       className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${enabled ? "bg-secondary" : "bg-surface-variant"}`}
     >
-      <span
-        className={`inline-block h-3.5 w-3.5 rounded-full bg-on-primary transition-transform ${enabled ? "translate-x-4" : "translate-x-1"}`}
-      />
+      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-on-primary transition-transform ${enabled ? "translate-x-4" : "translate-x-1"}`} />
     </button>
   );
 }
+
+function MaskedKey({ value }: { value: string }) {
+  const [show, setShow] = useState(false);
+  const display = show ? value : value.slice(0, 8) + "…" + value.slice(-4);
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono text-[11px] text-on-surface-variant">{display}</span>
+      <button
+        type="button"
+        onClick={() => setShow((v) => !v)}
+        className="font-mono text-[9px] text-on-surface-variant hover:text-on-surface uppercase tracking-widest"
+      >
+        {show ? "Hide" : "Show"}
+      </button>
+    </div>
+  );
+}
+
+const API_KEYS = [
+  { name: "Anthropic Claude", key: "sk-ant-api03-UZ_YQ0vgJ2jZ…", status: "Active", env: "ANTHROPIC_API_KEY" },
+  { name: "FRED (Federal Reserve)", key: "2aa765e1ebaa2d19f6f7b4f42cab5789", status: "Active", env: "FRED_API_KEY" },
+  { name: "EIA Open Data", key: "RecpLatgJC1oRHzTv6PMgXNDl54uyVNHJov8Cstz", status: "Active", env: "EIA_API_KEY" },
+  { name: "Tavily Search", key: "tvly-dev-2EV9yk-0LCutdCNBxLmygREe0kRngeEo…", status: "Active", env: "TAVILY_API_KEY" },
+];
+
+const DATA_SOURCES = [
+  { name: "CFTC COT Data", description: "Disaggregated futures positioning (weekly ZIP)", status: "Active", latency: "Weekly Wed" },
+  { name: "EIA Inventories", description: "Crude oil, nat gas, distillate, gasoline stocks", status: "Active", latency: "Weekly Wed" },
+  { name: "FRED Macro", description: "Fed funds rate, CPI, unemployment, yield spread", status: "Active", latency: "Weekly Sun" },
+  { name: "Yahoo Finance (yfinance)", description: "Price history, earnings calendar, stock universe", status: "Active", latency: "Daily" },
+  { name: "RSS / FinBERT Sentiment", description: "News feeds scored by FinBERT NLP model", status: "Active", latency: "Intraday" },
+  { name: "CFTC COT (current year)", description: "Current-year ZIP from cftc.gov", status: "Active", latency: "Weekly" },
+];
 
 export default function SettingsPage(): ReactElement {
   const [notifications, setNotifications] = useState({
@@ -44,104 +75,45 @@ export default function SettingsPage(): ReactElement {
   });
 
   const [thresholds, setThresholds] = useState({
-    minConfidence: "0.72",
+    minConfidence: "0.55",
     maxDrawdown: "0.15",
     minSharpe: "1.0",
+    spikePctDaily: "2.5",
+    spikePctWeekly: "5.0",
   });
-
-  const [apiKeys] = useState([
-    { name: "OpenAI GPT-4", key: "sk-...4x9f", status: "Active", added: "2025-04-12" },
-    { name: "Polygon.io Market", key: "pg-...8k2m", status: "Active", added: "2025-03-08" },
-    { name: "Alpha Vantage", key: "AV-...3n1q", status: "Inactive", added: "2025-01-20" },
-  ]);
 
   return (
     <div className="p-6 space-y-4 max-w-3xl">
       <div className="border-b border-outline-variant pb-4">
         <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">System Settings</p>
-        <p className="mt-1 font-mono text-xs text-on-surface-variant">Account profile, appearance, API credentials, and alert thresholds</p>
+        <p className="mt-1 font-mono text-xs text-on-surface-variant">Data sources, API credentials, signal thresholds, and alert preferences</p>
       </div>
-
-      <Section title="Account Profile">
-        <FieldRow label="Display Name">
-          <input
-            type="text"
-            defaultValue="Brian Maina"
-            className="bg-surface-container-high border border-outline-variant px-3 py-1.5 font-mono text-[12px] text-on-surface w-48 focus:outline-none focus:border-outline"
-          />
-        </FieldRow>
-        <FieldRow label="Email">
-          <span className="font-mono text-[12px] text-on-surface-variant">bmmaina@bu.edu</span>
-        </FieldRow>
-        <FieldRow label="Timezone">
-          <select className="bg-surface-container-high border border-outline-variant px-3 py-1.5 font-mono text-[12px] text-on-surface focus:outline-none">
-            <option>America/New_York (ET)</option>
-            <option>UTC</option>
-            <option>America/Chicago (CT)</option>
-          </select>
-        </FieldRow>
-      </Section>
-
-      <Section title="Appearance">
-        <FieldRow label="Theme">
-          <div className="flex gap-2">
-            {["Terminal Dark", "High Contrast", "Dim"].map((t) => (
-              <button
-                key={t}
-                type="button"
-                className={`px-3 py-1 font-mono text-[10px] font-bold tracking-[0.06em] border transition-colors ${
-                  t === "Terminal Dark"
-                    ? "border-secondary bg-secondary/10 text-secondary"
-                    : "border-outline-variant text-on-surface-variant hover:border-outline"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        </FieldRow>
-        <FieldRow label="Data Density">
-          <div className="flex gap-2">
-            {["Compact", "Default", "Comfortable"].map((d) => (
-              <button
-                key={d}
-                type="button"
-                className={`px-3 py-1 font-mono text-[10px] font-bold tracking-[0.06em] border transition-colors ${
-                  d === "Default"
-                    ? "border-secondary bg-secondary/10 text-secondary"
-                    : "border-outline-variant text-on-surface-variant hover:border-outline"
-                }`}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-        </FieldRow>
-      </Section>
 
       <Section title="Signal Thresholds">
         {[
-          { key: "minConfidence", label: "Min Confidence Score", unit: "" },
-          { key: "maxDrawdown", label: "Max Drawdown Limit", unit: "" },
-          { key: "minSharpe", label: "Min Sharpe Ratio", unit: "" },
-        ].map(({ key, label, unit }) => (
+          { key: "minConfidence", label: "Min Confidence Score (BUY filter)" },
+          { key: "maxDrawdown", label: "Max Drawdown Limit" },
+          { key: "minSharpe", label: "Min Sharpe Ratio" },
+          { key: "spikePctDaily", label: "Price Alert — Daily Spike %" },
+          { key: "spikePctWeekly", label: "Price Alert — Weekly Spike %" },
+        ].map(({ key, label }) => (
           <FieldRow key={key} label={label}>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={thresholds[key as keyof typeof thresholds]}
-                onChange={(e) => setThresholds((p) => ({ ...p, [key]: e.target.value }))}
-                className="bg-surface-container-high border border-outline-variant px-3 py-1.5 font-mono text-[12px] text-on-surface w-24 text-right focus:outline-none focus:border-outline"
-              />
-              {unit && <span className="font-mono text-[11px] text-on-surface-variant">{unit}</span>}
-            </div>
+            <input
+              type="text"
+              value={thresholds[key as keyof typeof thresholds]}
+              onChange={(e) => setThresholds((p) => ({ ...p, [key]: e.target.value }))}
+              className="bg-surface-container-high border border-outline-variant px-3 py-1.5 font-mono text-[12px] text-on-surface w-24 text-right focus:outline-none focus:border-outline"
+            />
           </FieldRow>
         ))}
+        <div className="pt-3 flex justify-end">
+          <p className="font-mono text-[10px] text-on-surface-variant opacity-60">Thresholds are read-only here — edit in backend/app/services/alerts_service.py and app/core/config.py</p>
+        </div>
       </Section>
 
       <Section title="Notifications">
         {[
-          { key: "signalAlerts", label: "New signal alerts" },
+          { key: "signalAlerts", label: "New BUY signal alerts" },
           { key: "backtestComplete", label: "Backtest job completed" },
           { key: "weeklyDigest", label: "Weekly performance digest" },
           { key: "errorAlerts", label: "Pipeline error alerts" },
@@ -156,11 +128,12 @@ export default function SettingsPage(): ReactElement {
       </Section>
 
       <Section title="API Keys">
+        <p className="font-mono text-[10px] text-on-surface-variant mb-3 opacity-60">Keys are loaded from .env at startup. Rotate by updating .env and restarting the backend.</p>
         <div className="overflow-x-auto -mx-4 -mb-4">
           <table className="w-full text-left">
             <thead className="border-b border-outline-variant bg-surface-container-high">
               <tr>
-                {["SERVICE", "KEY", "STATUS", "ADDED"].map((h) => (
+                {["Service", "Env Var", "Key Preview", "Status"].map((h) => (
                   <th key={h} className="px-4 py-2 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">
                     {h}
                   </th>
@@ -168,20 +141,16 @@ export default function SettingsPage(): ReactElement {
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant">
-              {apiKeys.map((k) => (
+              {API_KEYS.map((k) => (
                 <tr key={k.name}>
-                  <td className="px-4 py-2.5 font-mono text-[12px] text-on-surface">{k.name}</td>
-                  <td className="px-4 py-2.5 font-mono text-[11px] text-on-surface-variant">{k.key}</td>
+                  <td className="px-4 py-2.5 font-mono text-[11px] text-on-surface">{k.name}</td>
+                  <td className="px-4 py-2.5 font-mono text-[10px] text-on-surface-variant">{k.env}</td>
+                  <td className="px-4 py-2.5"><MaskedKey value={k.key} /></td>
                   <td className="px-4 py-2.5">
-                    <span className={`font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border ${
-                      k.status === "Active"
-                        ? "border-secondary/30 bg-secondary/10 text-secondary"
-                        : "border-outline-variant text-on-surface-variant"
-                    }`}>
+                    <span className="font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border border-secondary/30 bg-secondary/10 text-secondary">
                       {k.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 font-mono text-[11px] text-on-surface-variant">{k.added}</td>
                 </tr>
               ))}
             </tbody>
@@ -189,14 +158,33 @@ export default function SettingsPage(): ReactElement {
         </div>
       </Section>
 
-      <div className="flex justify-end">
-        <button
-          type="button"
-          className="px-5 py-2 bg-secondary text-on-secondary font-mono text-[11px] font-bold tracking-[0.08em] uppercase hover:bg-secondary-fixed-dim transition-colors"
-        >
-          Save Changes
-        </button>
-      </div>
+      <Section title="Data Sources">
+        <div className="space-y-0 -mx-4 -mb-4">
+          {DATA_SOURCES.map((ds) => (
+            <div key={ds.name} className="flex items-start justify-between px-4 py-3 border-b border-outline-variant last:border-0">
+              <div>
+                <p className="font-mono text-[11px] text-on-surface">{ds.name}</p>
+                <p className="font-mono text-[10px] text-on-surface-variant mt-0.5">{ds.description}</p>
+              </div>
+              <div className="shrink-0 ml-4 text-right">
+                <span className="font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border border-secondary/30 bg-secondary/10 text-secondary">
+                  {ds.status}
+                </span>
+                <p className="font-mono text-[9px] text-on-surface-variant mt-1">{ds.latency}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Environment">
+        <FieldRow label="Backend Port"><span className="font-mono text-[12px] text-on-surface">8000</span></FieldRow>
+        <FieldRow label="Frontend Port"><span className="font-mono text-[12px] text-on-surface">5173</span></FieldRow>
+        <FieldRow label="Database"><span className="font-mono text-[12px] text-on-surface">PostgreSQL (asyncpg)</span></FieldRow>
+        <FieldRow label="Cache"><span className="font-mono text-[12px] text-on-surface">Redis</span></FieldRow>
+        <FieldRow label="Scheduler"><span className="font-mono text-[12px] text-secondary">Enabled (APScheduler)</span></FieldRow>
+        <FieldRow label="Timezone"><span className="font-mono text-[12px] text-on-surface">America/New_York</span></FieldRow>
+      </Section>
     </div>
   );
 }
