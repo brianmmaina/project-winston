@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import COMMODITIES
 from app.data.fetcher import ingest_commodity_prices, ingest_macro_indicators, load_macro_dataframe
+from app.data.cot_fetcher import get_cot_history
 from app.data.loader import load_price_ohlcv, load_sentiment_panel
+from app.db.models import EiaInventory
 from app.data.sentiment_fetcher import ingest_sentiment
 from app.db.models import BacktestResult
 from app.db.operations import bulk_insert_signals, load_close_history
@@ -110,13 +112,77 @@ def history_to_wide(history_map: dict[str, list[tuple[Any, float]]]) -> pd.DataF
     return frame.sort_index().ffill()
 
 
+async def _load_cot_df(session: AsyncSession, ticker: str) -> pd.DataFrame:
+    rows = await get_cot_history(session, ticker, weeks=260)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df.index = pd.to_datetime(df["report_date"])
+    return df.drop(columns=["report_date"])
+
+
+async def _load_usda_df(session: AsyncSession, ticker: str) -> pd.DataFrame:
+    """Load USDA PSD rows for this ticker from the usda_psd table."""
+    from sqlalchemy import text as _text
+    try:
+        result = await session.execute(
+            _text("SELECT attribute_id, market_year, value FROM usda_psd WHERE ticker = :ticker ORDER BY market_year"),
+            {"ticker": ticker},
+        )
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=["attribute_id", "market_year", "value"])
+    except Exception as exc:
+        logger.debug("USDA load failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
+async def _load_eia_df(session: AsyncSession, ticker: str) -> pd.DataFrame:
+    """Load EIA inventory rows for this ticker (all series_ids) from the DB."""
+    from sqlalchemy import desc
+    try:
+        result = await session.execute(
+            select(EiaInventory)
+            .where(EiaInventory.ticker == ticker)
+            .order_by(EiaInventory.report_date)
+        )
+        rows = result.scalars().all()
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame([
+            {"series_id": r.series_id, "report_date": r.report_date, "value": float(r.value) if r.value is not None else None, "wow_change": float(r.wow_change) if r.wow_change is not None else None}
+            for r in rows
+        ])
+    except Exception as exc:
+        logger.debug("EIA load failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+
+
+async def _load_cross_asset_df(session: AsyncSession, exclude_ticker: str) -> pd.DataFrame:
+    """Load close prices of select reference tickers as cross-asset features."""
+    ref_tickers = ["CL=F", "GC=F", "HG=F", "ZC=F"]
+    refs = [t for t in ref_tickers if t != exclude_ticker]
+    hist = await load_close_history(session, refs, lookback_days=1200)
+    cols = {}
+    for t, pairs in hist.items():
+        if pairs:
+            idx = [pd.Timestamp(dt) for dt, _ in pairs]
+            cols[t.replace("=F", "").replace("=", "")] = pd.Series([px for _, px in pairs], index=idx)
+    return pd.DataFrame(cols).sort_index() if cols else pd.DataFrame()
+
+
 async def materialize_training_frame(session: AsyncSession, ticker: str) -> pd.DataFrame | None:
     macro = await load_macro_dataframe(session)
     px = await load_price_ohlcv(session, ticker)
     if px.empty:
         return None
     sent = await load_sentiment_panel(session, ticker)
-    base = build_base_feature_frame(px, macro, sent)
+    cot = await _load_cot_df(session, ticker)
+    cross = await _load_cross_asset_df(session, ticker)
+    usda = await _load_usda_df(session, ticker)
+    eia = await _load_eia_df(session, ticker)
+    base = build_base_feature_frame(px, macro, sent, cot=cot, cross_asset=cross, usda=usda, eia=eia)
     bundle = ensure_regime_bundle(ticker)
     if bundle is None:
         try:
@@ -138,7 +204,11 @@ async def compute_signal_payloads(session: AsyncSession) -> tuple[list[dict[str,
         if px.empty:
             continue
         sent = await load_sentiment_panel(session, ticker)
-        base = build_base_feature_frame(px, macro, sent)
+        cot = await _load_cot_df(session, ticker)
+        cross = await _load_cross_asset_df(session, ticker)
+        usda = await _load_usda_df(session, ticker)
+        eia = await _load_eia_df(session, ticker)
+        base = build_base_feature_frame(px, macro, sent, cot=cot, cross_asset=cross, usda=usda, eia=eia)
         bundle = ensure_regime_bundle(ticker)
         if bundle is None:
             try:
@@ -210,11 +280,23 @@ def payloads_to_signal_rows(filtered: list[dict[str, Any]]) -> list[dict[str, An
 
 
 async def run_signal_refresh(session: AsyncSession) -> dict[str, Any]:
+    from app.services.risk_service import apply_portfolio_limits, portfolio_summary
+
     ingestion = await refresh_external_data(session)
     filtered, raw_list = await compute_signal_payloads(session)
     if not filtered:
         filtered = placeholder_payloads()
         raw_list = list(filtered)
+
+    # Apply portfolio-level exposure limits and correlation-aware sizing
+    close_hist = await load_close_history(session, list(COMMODITIES.keys()), 120)
+    close_price_dict: dict[str, pd.DataFrame] = {}
+    for t, pairs in close_hist.items():
+        if pairs:
+            close_price_dict[t] = pd.DataFrame({"close": [px for _, px in pairs]})
+    filtered = await asyncio.to_thread(apply_portfolio_limits, filtered, close_price_dict)
+    risk_data = portfolio_summary(filtered)
+
     rows = payloads_to_signal_rows(filtered)
     await bulk_insert_signals(session, rows)
     await session.commit()
@@ -225,6 +307,7 @@ async def run_signal_refresh(session: AsyncSession) -> dict[str, Any]:
         "raw": raw_list,
         "refreshed_at": refreshed_at,
         "filtered_count": len(filtered),
+        "risk": risk_data,
     }
 
 
