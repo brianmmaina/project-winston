@@ -231,6 +231,7 @@ export default function StocksDashboard(): ReactElement {
                   <SortTh col="score" label="Score" right />
                   <SortTh col="last_close" label="Last" right />
                   <th className="px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant text-center whitespace-nowrap">Signal</th>
+                  <th className="px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant text-center whitespace-nowrap">Factors</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant">
@@ -256,6 +257,26 @@ export default function StocksDashboard(): ReactElement {
                       ) : (
                         <span className="font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border border-outline-variant text-on-surface-variant">HOLD</span>
                       )}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1.5">
+                        {(["momentum_score", "quality_score", "value_score"] as const).map((f, fi) => {
+                          const v = r[f];
+                          const labels = ["M", "Q", "V"];
+                          if (v == null) return <span key={f} className="font-mono text-[9px] text-on-surface-variant opacity-30">{labels[fi]}</span>;
+                          const capped = Math.max(-3, Math.min(3, v));
+                          const pct = Math.round(((capped + 3) / 6) * 100);
+                          const color = v >= 0.5 ? "bg-secondary" : v <= -0.5 ? "bg-error" : "bg-on-surface-variant";
+                          return (
+                            <div key={f} className="flex flex-col items-center gap-0.5" title={`${labels[fi]}: ${v.toFixed(2)}`}>
+                              <span className="font-mono text-[8px] text-on-surface-variant opacity-60">{labels[fi]}</span>
+                              <div className="w-1 h-6 bg-surface-container-high relative overflow-hidden">
+                                <div className={`absolute bottom-0 w-full ${color} opacity-80`} style={{ height: `${pct}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </td>
                   </tr>
                 ))}
