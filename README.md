@@ -8,7 +8,17 @@ The idea is to have something that works like a team of analysts running in the 
 
 ## What's built
 
-**ML pipeline — commodities**
+| Layer | Status |
+|---|---|
+| ML pipeline — commodities (17 futures) | Complete |
+| ML pipeline — stocks (S&P 500 ~503 names) | Complete |
+| Data ingestion (yfinance, FRED, RSS + FinBERT) | Complete |
+| FastAPI backend + Docker | Complete |
+| React/TypeScript frontend (commodities + stocks) | Complete |
+| Multi-agent layer — backend (11 sub-agents + overseer) | Complete |
+| Agent analysis UI | 🔲 Not started |
+| Agent scheduling | 🔲 Not started |
+| Agent feedback / performance tracking | 🔲 Not started |
 
 Per-ticker stacked XGBoost + LightGBM classifiers across three horizons (5d, 10d, 21d). Hidden Markov Model for regime detection (bear / bull / high-volatility). Kelly criterion position sizing. Correlation filter to remove redundant signals. Walk-forward OOS validation. Vectorbt backtester per ticker.
 
