@@ -13,8 +13,8 @@ import {
   YAxis,
 } from "recharts";
 
-import { ApiClientError, getBacktestDetail, getCommodityHistory, getSignalDetail } from "../api/client";
-import type { BacktestStatsBlock, SignalPayload } from "../api/types.generated";
+import { ApiClientError, getBacktestDetail, getCommodityCot, getCommodityHistory, getSignalDetail } from "../api/client";
+import type { BacktestStatsBlock, CotResponse, SignalPayload } from "../api/types.generated";
 import { PageState } from "../components/PageState";
 
 function errMsg(e: unknown): string {
@@ -41,6 +41,7 @@ export default function CommodityDetail(): ReactElement {
   const [signal, setSignal] = useState<SignalPayload | null>(null);
   const [history, setHistory] = useState<{ date: string; close: number }[]>([]);
   const [backtest, setBacktest] = useState<BacktestStatsBlock | null>(null);
+  const [cot, setCot] = useState<CotResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,14 +50,16 @@ export default function CommodityDetail(): ReactElement {
     setLoading(true);
     setError(null);
     try {
-      const [sig, hist, bt] = await Promise.all([
+      const [sig, hist, bt, cotData] = await Promise.all([
         getSignalDetail(ticker),
         getCommodityHistory(ticker, 180),
         getBacktestDetail(ticker),
+        getCommodityCot(ticker).catch(() => null),
       ]);
       setSignal(sig);
       setHistory(hist);
       setBacktest(bt);
+      setCot(cotData);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -153,6 +156,30 @@ export default function CommodityDetail(): ReactElement {
                     </div>
                   </div>
                 )}
+
+                {cot && cot.history.length > 1 && (() => {
+                  const cotPoints = cot.history
+                    .filter((h) => h.spec_pct_long !== null)
+                    .map((h) => ({ date: h.report_date.slice(0, 10), specLong: +(h.spec_pct_long! * 100).toFixed(1) }));
+                  return cotPoints.length > 1 ? (
+                    <div className="border border-outline-variant bg-surface-container">
+                      <div className="px-4 py-3 border-b border-outline-variant">
+                        <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">COT Speculative Long %</p>
+                      </div>
+                      <div className="p-4 h-48">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={cotPoints} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                            <CartesianGrid stroke="#444748" strokeDasharray="2 4" vertical={false} />
+                            <XAxis dataKey="date" stroke="#8e9192" fontSize={10} fontFamily="JetBrains Mono" minTickGap={60} />
+                            <YAxis stroke="#8e9192" fontSize={10} fontFamily="JetBrains Mono" domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                            <Tooltip contentStyle={{ background: "#1f2020", border: "1px solid #444748", color: "#e5e2e1", fontFamily: "JetBrains Mono", fontSize: 11 }} formatter={(v) => [`${v}%`, "Spec Long"]} />
+                            <Line type="monotone" dataKey="specLong" name="Spec Long %" stroke="#5cde94" strokeWidth={2} dot={false} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
               </div>
 
               <div className="space-y-3">
@@ -170,6 +197,32 @@ export default function CommodityDetail(): ReactElement {
                     <MetricRow label="Sent. Score 1d" value={signal.sentiment.score_1d.toFixed(3)} />
                     <MetricRow label="Kelly Size" value={`${kellyPct}%`} />
                     <MetricRow label="Regime" value={signal.regime_label} />
+                    {signal.expected_return_pct !== undefined && (
+                      <MetricRow
+                        label="Expected Return"
+                        value={`${(signal.expected_return_pct * 100).toFixed(2)}%`}
+                        colored={signal.expected_return_pct > 0 ? "green" : "red"}
+                      />
+                    )}
+                    {signal.downside_risk_pct !== undefined && (
+                      <MetricRow
+                        label="Downside Risk"
+                        value={`${(signal.downside_risk_pct * 100).toFixed(2)}%`}
+                        colored="red"
+                      />
+                    )}
+                    {signal.risk_flags && signal.risk_flags.length > 0 && (
+                      <div className="py-2 border-b border-outline-variant last:border-0">
+                        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-on-surface-variant block mb-1">Risk Flags</span>
+                        <div className="flex flex-wrap gap-1">
+                          {signal.risk_flags.map((flag) => (
+                            <span key={flag} className="font-mono text-[9px] px-1.5 py-0.5 border border-error/30 bg-error/10 text-error">
+                              {flag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -186,6 +239,33 @@ export default function CommodityDetail(): ReactElement {
                         <MetricRow label="Total Return" value={backtest.total_return.toFixed(3)} colored={backtest.total_return > 0 ? "green" : "red"} />
                       )}
                       <MetricRow label="Trades" value={String(backtest.num_trades)} />
+                    </div>
+                  </div>
+                )}
+
+                {cot?.latest && (
+                  <div className="border border-outline-variant bg-surface-container">
+                    <div className="px-4 py-3 border-b border-outline-variant">
+                      <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">COT Positioning</p>
+                      <p className="font-mono text-[9px] text-on-surface-variant opacity-60 mt-0.5">as of {cot.latest.report_date}</p>
+                    </div>
+                    <div className="px-4 py-2">
+                      {cot.latest.spec_pct_long !== null && (
+                        <div className="py-2 border-b border-outline-variant">
+                          <div className="flex justify-between mb-1">
+                            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-on-surface-variant">Spec Long %</span>
+                            <span className={`font-mono text-[12px] font-semibold ${cot.latest.spec_pct_long > 0.6 ? "text-secondary" : cot.latest.spec_pct_long < 0.4 ? "text-error" : "text-on-surface"}`}>
+                              {(cot.latest.spec_pct_long * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 bg-surface-container-high rounded-none overflow-hidden">
+                            <div className="h-full bg-secondary" style={{ width: `${Math.round(cot.latest.spec_pct_long * 100)}%` }} />
+                          </div>
+                        </div>
+                      )}
+                      <MetricRow label="Comm. Net" value={cot.latest.comm_net !== null ? cot.latest.comm_net.toLocaleString() : "—"} colored={cot.latest.comm_net !== null && cot.latest.comm_net > 0 ? "green" : "red"} />
+                      <MetricRow label="Spec. Net" value={cot.latest.spec_net !== null ? cot.latest.spec_net.toLocaleString() : "—"} colored={cot.latest.spec_net !== null && cot.latest.spec_net > 0 ? "green" : "red"} />
+                      <MetricRow label="Open Interest" value={cot.latest.open_interest !== null ? cot.latest.open_interest.toLocaleString() : "—"} />
                     </div>
                   </div>
                 )}
