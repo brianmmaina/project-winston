@@ -1,6 +1,7 @@
 """Shared agentic loop runner used by all agents."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -12,6 +13,8 @@ import anthropic
 from .tools import TOOL_SCHEMAS, ToolContext, execute_tool
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_WAITS = [15, 30, 60, 120]  # seconds to wait on successive 429s
 
 
 @dataclass
@@ -34,23 +37,38 @@ async def run_agent(
     messages: list[dict] = [{"role": "user", "content": initial_message}]
 
     for turn in range(max_turns):
-        try:
-            response = await client.messages.create(
-                model=model,
-                max_tokens=8192,
-                system=[
-                    {
-                        "type": "text",
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                tools=TOOL_SCHEMAS,
-                messages=messages,
-            )
-        except Exception as exc:
-            logger.error("Agent %s failed on turn %d: %s", agent_name, turn, exc)
-            return AgentResult(name=agent_name, text="", error=str(exc))
+        response = None
+        for attempt, wait in enumerate([0] + _RATE_LIMIT_WAITS):
+            if wait:
+                logger.warning(
+                    "Agent %s rate-limited on turn %d, waiting %ds (attempt %d)",
+                    agent_name, turn, wait, attempt,
+                )
+                await asyncio.sleep(wait)
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=8192,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": system_prompt,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    tools=TOOL_SCHEMAS,
+                    messages=messages,
+                )
+                break
+            except anthropic.RateLimitError as exc:
+                if attempt == len(_RATE_LIMIT_WAITS):
+                    logger.error("Agent %s exhausted retries on turn %d", agent_name, turn)
+                    return AgentResult(name=agent_name, text="", error=str(exc))
+            except Exception as exc:
+                logger.error("Agent %s failed on turn %d: %s", agent_name, turn, exc)
+                return AgentResult(name=agent_name, text="", error=str(exc))
+        if response is None:
+            return AgentResult(name=agent_name, text="", error="rate_limit_exhausted")
 
         messages.append({"role": "assistant", "content": response.content})
 

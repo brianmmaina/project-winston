@@ -15,7 +15,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import desc, select
 
+from app.agents.daily_scan import run_daily_scan
 from app.constants import COMMODITIES, HORIZONS, REDIS_SIGNAL_FILTERED_KEY, REDIS_SIGNAL_META_KEY, REDIS_SIGNAL_RAW_KEY
+from app.data.calendar_fetcher import ingest_earnings_calendar, ingest_economic_calendar
+from app.data.cot_fetcher import ingest_cot_data
+from app.data.eia_fetcher import ingest_eia_data
+from app.data.usda_fetcher import ingest_usda
+from app.services.alerts_service import check_price_alerts
+from app.services.price_monitor import check_price_thresholds
+from app.services.recommendations_service import check_outcomes
 from app.core.config import get_settings
 from app.core.redis_client import cache_save_json
 from app.db.models import ModelRun
@@ -203,6 +211,229 @@ def build_scheduler() -> AsyncIOScheduler | None:
         max_instances=1,
         misfire_grace_time=3600,
     )
+
+    async def daily_agent_scan() -> None:
+        try:
+            await run_daily_scan()
+        except Exception:
+            LOGGER.exception("Daily agent scan failed")
+
+    async def daily_outcome_check() -> None:
+        try:
+            async with async_session_factory() as session:
+                n = await check_outcomes(session)
+            LOGGER.info("Outcome check updated %d records", n)
+        except Exception:
+            LOGGER.exception("Outcome check failed")
+
+    sched.add_job(
+        daily_agent_scan,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=0),
+        id="daily_agent_scan",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    sched.add_job(
+        daily_outcome_check,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=30),
+        id="daily_outcome_check",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # ------------------------------------------------------------------
+    # Phase 3/4 — COT, EIA, calendar, and price alert jobs
+    # ------------------------------------------------------------------
+
+    async def weekly_cot_pipeline() -> None:
+        try:
+            async with async_session_factory() as session:
+                n = await ingest_cot_data(session, years_back=1)
+            LOGGER.info("COT ingest: %d rows", n)
+        except Exception:
+            LOGGER.exception("COT ingest failed")
+
+    async def weekly_eia_pipeline() -> None:
+        try:
+            async with async_session_factory() as session:
+                n = await ingest_eia_data(session, weeks_back=52)
+            LOGGER.info("EIA ingest: %d rows", n)
+        except Exception:
+            LOGGER.exception("EIA ingest failed")
+
+    async def weekly_calendar_pipeline() -> None:
+        try:
+            async with async_session_factory() as session:
+                econ = await ingest_economic_calendar(session)
+                from app.services.stocks_service import get_active_tickers
+                tickers = await get_active_tickers(session)
+                earnings = await ingest_earnings_calendar(session, tickers[:100])  # top 100 to avoid rate limits
+            LOGGER.info("Calendar ingest: %d econ events, %d earnings events", econ, earnings)
+        except Exception:
+            LOGGER.exception("Calendar ingest failed")
+
+    async def price_alert_scan() -> None:
+        try:
+            async with async_session_factory() as session:
+                n = await check_price_alerts(session)
+            LOGGER.info("Price alert scan: %d alerts", n)
+        except Exception:
+            LOGGER.exception("Price alert scan failed")
+
+    async def price_threshold_monitor() -> None:
+        try:
+            async with async_session_factory() as session:
+                triggered = await check_price_thresholds(session)
+            if triggered:
+                LOGGER.info("Price threshold monitor: %d trigger(s): %s",
+                            len(triggered), [t["ticker"] for t in triggered])
+        except Exception:
+            LOGGER.exception("Price threshold monitor failed")
+
+    async def monthly_usda_pipeline() -> None:
+        try:
+            async with async_session_factory() as session:
+                result = await ingest_usda(session)
+            LOGGER.info("USDA ingest: %d rows upserted", result.get("rows_upserted", 0))
+        except Exception:
+            LOGGER.exception("USDA ingest failed")
+
+    async def daily_paper_mtm() -> None:
+        from app.services.paper_trading_service import mark_to_market
+        try:
+            async with async_session_factory() as session:
+                result = await mark_to_market(session)
+                await session.commit()
+            LOGGER.info("Paper MTM: updated=%d stopped_out=%s", result["updated"], result["stopped_out"])
+        except Exception:
+            LOGGER.exception("Paper mark-to-market failed")
+
+    async def intraday_paper_mtm() -> None:
+        """Refresh prices + check stops for open positions every 2 min during market hours."""
+        from app.services.paper_trading_service import mark_to_market
+        try:
+            async with async_session_factory() as session:
+                result = await mark_to_market(session)
+                await session.commit()
+            if result["updated"] > 0 or result["stopped_out"]:
+                LOGGER.debug(
+                    "Intraday paper MTM: updated=%d stopped_out=%s",
+                    result["updated"], result["stopped_out"],
+                )
+        except Exception:
+            LOGGER.exception("Intraday paper MTM failed")
+
+    sched.add_job(
+        daily_paper_mtm,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=30),
+        id="paper_mtm",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    sched.add_job(
+        intraday_paper_mtm,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="*/2"),
+        id="intraday_paper_mtm",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
+
+    async def daily_agent_analysis() -> None:
+        """Full 11-agent pipeline — only runs if AGENT_ANALYSIS_SCHEDULED=true."""
+        from app.agents.pipeline import run_agent_pipeline
+        try:
+            async with async_session_factory() as session:
+                result = await run_agent_pipeline(session)
+            LOGGER.info(
+                "Scheduled agent analysis complete: overseer_ok=%s sub_agents=%d/%d",
+                result["overseer"]["error"] is None,
+                result["sub_agent_success_count"],
+                result["sub_agent_count"],
+            )
+        except Exception:
+            LOGGER.exception("Scheduled agent analysis failed")
+
+    sched.add_job(
+        weekly_cot_pipeline,
+        CronTrigger(day_of_week="wed", hour=9, minute=0),
+        id="weekly_cot",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=7200,
+    )
+
+    sched.add_job(
+        weekly_eia_pipeline,
+        CronTrigger(day_of_week="wed", hour=10, minute=30),
+        id="weekly_eia",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    sched.add_job(
+        weekly_calendar_pipeline,
+        CronTrigger(day_of_week="sun", hour=6, minute=0),
+        id="weekly_calendar",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    sched.add_job(
+        price_alert_scan,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,30"),
+        id="price_alert_scan",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=1800,
+    )
+
+    sched.add_job(
+        price_threshold_monitor,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,15,30,45"),
+        id="price_threshold_monitor",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=900,
+    )
+
+    sched.add_job(
+        monthly_usda_pipeline,
+        CronTrigger(day=10, hour=3, minute=0),
+        id="monthly_usda",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=7200,
+    )
+
+    if settings.agent_analysis_scheduled and settings.anthropic_api_key:
+        sched.add_job(
+            daily_agent_analysis,
+            CronTrigger(day_of_week="mon-fri", hour=9, minute=0),
+            id="daily_agent_analysis",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+        LOGGER.info("Scheduled daily agent analysis at 09:00 NY (AGENT_ANALYSIS_SCHEDULED=true)")
 
     sched.start()
     LOGGER.info(

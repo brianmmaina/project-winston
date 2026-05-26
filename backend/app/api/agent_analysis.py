@@ -13,6 +13,8 @@ from app.core.redis_client import cache_load_json
 from app.core.security import require_api_key
 from app.db.session import async_session_factory
 from app.services.jobs_service import complete_job, fail_job, mark_running, start_job
+from app.services.recommendations_service import check_outcomes, get_performance_summary
+from app.agents.daily_scan import run_daily_scan
 
 logger = logging.getLogger(__name__)
 
@@ -72,3 +74,39 @@ async def get_analysis_meta() -> dict[str, Any]:
     if meta is None:
         raise HTTPException(status_code=404, detail="No agent analysis metadata available.")
     return meta
+
+
+@router.get("/performance")
+async def get_performance() -> dict[str, Any]:
+    async with async_session_factory() as session:
+        return await get_performance_summary(session)
+
+
+@router.post("/check-outcomes", dependencies=[Depends(require_api_key)])
+async def trigger_outcome_check(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    async def _run() -> None:
+        async with async_session_factory() as session:
+            n = await check_outcomes(session)
+            logger.info("Outcome check updated %d records", n)
+    background_tasks.add_task(_run)
+    return {"status": "outcome check started"}
+
+
+@router.post("/daily-scan", dependencies=[Depends(require_api_key)])
+async def trigger_daily_scan(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    async def _run() -> None:
+        try:
+            await run_daily_scan()
+        except Exception as exc:
+            logger.exception("Daily scan failed: %s", exc)
+    background_tasks.add_task(_run)
+    return {"status": "daily scan started"}
+
+
+@router.get("/daily-scan")
+async def get_daily_scan() -> dict[str, Any]:
+    from app.constants import REDIS_DAILY_SCAN_KEY
+    data = await cache_load_json(REDIS_DAILY_SCAN_KEY)
+    if data is None:
+        raise HTTPException(status_code=404, detail="No daily scan available yet.")
+    return data

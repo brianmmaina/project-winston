@@ -120,6 +120,76 @@ class RankingRow(BaseModel):
     in_topk: bool
     horizon: str
     last_close: float | None = None
+    momentum_score: float | None = None
+    quality_score: float | None = None
+    value_score: float | None = None
+
+
+def _zscore_series(vals: dict[str, float]) -> dict[str, float]:
+    """Cross-sectional z-score a dict of ticker → value."""
+    if not vals:
+        return {}
+    import statistics
+    v_list = list(vals.values())
+    if len(v_list) < 2:
+        return {k: 0.0 for k in vals}
+    mu = statistics.mean(v_list)
+    sd = statistics.stdev(v_list) or 1.0
+    return {k: round((v - mu) / sd, 4) for k, v in vals.items()}
+
+
+async def _compute_factor_scores(session: AsyncSession, tickers: list[str]) -> dict[str, dict[str, float]]:
+    """Batch-compute momentum, quality, value z-scores cross-sectionally."""
+    if not tickers:
+        return {}
+    cutoff = date_t.today() - timedelta(days=280)
+    q = await session.execute(
+        select(StockPrice.ticker, StockPrice.date, StockPrice.close)
+        .where(StockPrice.ticker.in_(tickers), StockPrice.date >= cutoff, StockPrice.close.isnot(None))
+        .order_by(StockPrice.ticker, StockPrice.date)
+    )
+    rows = q.all()
+    # Group by ticker
+    from collections import defaultdict
+    price_map: dict[str, list[tuple[date_t, float]]] = defaultdict(list)
+    for row in rows:
+        price_map[row[0]].append((row[1], float(row[2])))
+
+    raw_mom: dict[str, float] = {}
+    raw_qual: dict[str, float] = {}
+    raw_val: dict[str, float] = {}
+
+    for ticker, pairs in price_map.items():
+        if len(pairs) < 22:
+            continue
+        closes = [p for _, p in pairs]
+        latest = closes[-1]
+        # Momentum: 12-1m return (last 252 days minus last 21 days)
+        p252 = closes[0] if len(closes) >= 252 else closes[0]
+        p21 = closes[-22] if len(closes) >= 22 else closes[0]
+        raw_mom[ticker] = (p21 / p252 - 1.0) if p252 > 0 else 0.0
+        # Quality: negative annualised volatility (lower vol = higher quality)
+        if len(closes) >= 22:
+            import math
+            rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, min(63, len(closes)))]
+            std = (sum((r - sum(rets) / len(rets)) ** 2 for r in rets) / len(rets)) ** 0.5
+            raw_qual[ticker] = -(std * math.sqrt(252))
+        # Value: inverse proximity to 52w high (lower proximity = higher value)
+        high_52w = max(c for _, c in pairs[-252:]) if len(pairs) >= 252 else max(c for _, c in pairs)
+        raw_val[ticker] = 1.0 - (latest / high_52w) if high_52w > 0 else 0.0
+
+    mom_z = _zscore_series(raw_mom)
+    qual_z = _zscore_series(raw_qual)
+    val_z = _zscore_series(raw_val)
+
+    result: dict[str, dict[str, float]] = {}
+    for ticker in tickers:
+        result[ticker] = {
+            "momentum_score": mom_z.get(ticker),
+            "quality_score": qual_z.get(ticker),
+            "value_score": val_z.get(ticker),
+        }
+    return result
 
 
 @router.get("/rankings", response_model=list[RankingRow])
@@ -146,9 +216,11 @@ async def api_stock_rankings(
 
     tickers = [r.ticker for r in rows]
     closes = await fetch_latest_stock_closes(session, tickers)
+    factors = await _compute_factor_scores(session, tickers)
 
     out: list[dict[str, Any]] = []
     for r in rows:
+        f = factors.get(r.ticker, {})
         out.append(
             {
                 "date": r.date,
@@ -160,6 +232,9 @@ async def api_stock_rankings(
                 "in_topk": bool(r.in_topk),
                 "horizon": r.horizon,
                 "last_close": closes.get(r.ticker),
+                "momentum_score": f.get("momentum_score"),
+                "quality_score": f.get("quality_score"),
+                "value_score": f.get("value_score"),
             }
         )
     return out

@@ -1,10 +1,12 @@
 # Project Winston
 
-An AI-powered multi-agent trading research platform. Multiple specialist Claude agents analyze different market sectors in parallel, validate ML-generated signals with live news and data, and a Chief Analyst (overseer) agent synthesizes their findings into final trade recommendations — across both commodity futures and S&P 500 equities.
+Winston is a trading research platform that combines a quantitative ML pipeline with a layer of AI agents that reason over those signals. The ML models handle the math — price patterns, regime detection, cross-sectional ranking. The agents handle the context — reading live news, checking macro conditions, understanding why something is moving, and deciding whether the model's signal holds up against what's actually happening in the world. An overseer agent reads all of that and issues the final recommendation.
+
+The idea is to have something that works like a team of analysts running in the background — each one covering their domain, reporting up, and getting a final call from the head analyst. It covers 17 commodity futures and the full S&P 500.
 
 ---
 
-## Current status
+## What's built
 
 | Layer | Status |
 |---|---|
@@ -18,214 +20,165 @@ An AI-powered multi-agent trading research platform. Multiple specialist Claude 
 | Agent scheduling | 🔲 Not started |
 | Agent feedback / performance tracking | 🔲 Not started |
 
+Per-ticker stacked XGBoost + LightGBM classifiers across three horizons (5d, 10d, 21d). Hidden Markov Model for regime detection (bear / bull / high-volatility). Kelly criterion position sizing. Correlation filter to remove redundant signals. Walk-forward OOS validation. Vectorbt backtester per ticker.
+
+**ML pipeline — stocks**
+
+Global LightGBM cross-sectional ranker across ~503 S&P 500 names. Sector-relative z-score features. Top-25 portfolio with per-GICS-sector caps. Portfolio backtest benchmarked against SPY.
+
+**Data ingestion**
+
+Daily OHLCV from yfinance for commodities and stocks. Macro indicators from FRED (Fed rate, yield spread, VIX, CPI, breakeven inflation). RSS news feeds processed through FinBERT for per-ticker sentiment scores.
+
+**Agent layer**
+
+11 specialist agents run in parallel — 3 commodity domain agents (energy, metals, agriculture), 5 stock sector agents (tech/comms, healthcare, financials, cyclicals, defensives), and 3 cross-cutting agents (macro/rates, geopolitics, sentiment/news). Each has access to live web search via Tavily, the ML signals, price history, macro data, and sentiment scores. An overseer agent reads all 11 reports, cross-checks the ML signals independently, and issues STRONG_BUY / BUY / HOLD / AVOID with full reasoning.
+
+**Backend**
+
+FastAPI with async SQLAlchemy. Alembic migrations. APScheduler for daily data refresh and weekly retraining. Redis for signal caching. API key auth on write endpoints. Async job system so long-running tasks return a job_id and the client polls for completion.
+
+**Frontend**
+
+React + TypeScript + TailwindCSS. Pages for commodity signals, stock rankings, portfolio equity curve vs SPY, stock and commodity detail views, and backtest results.
+
 ---
 
-## Architecture
+## What's not built yet
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Browser                                 │
-│  /commodities  /stocks  /stocks/portfolio  /agent-analysis      │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ HTTPS / JSON
-┌──────────────────────────▼──────────────────────────────────────┐
-│                       FastAPI backend                            │
-│                                                                  │
-│  /api/signals          /api/stocks/*       /api/agent-analysis  │
-│  /api/refresh-async    /api/retrain        /api/jobs/{job_id}   │
-└───────┬──────────────────────┬────────────────────┬─────────────┘
-        │                      │                    │
-        │  ┌── ML Pipeline ────┤                    │
-        │  │  features.py      │              ┌─────▼──────────────┐
-        │  │  trainer.py       │              │   Agent Pipeline   │
-        │  │  predictor.py     │              │                    │
-        │  │  stocks_ranker.py │              │  11 sub-agents     │
-        │  │  regime.py        │              │  (run in parallel) │
-        │  │  backtester.py    │              │        ↓           │
-        │  └───────────────────┘              │   1 overseer       │
-        │                                     └──────────┬─────────┘
-        ▼                                                │
-  ┌─────────────┐   ┌──────────────┐                    │
-  │  PostgreSQL  │   │    Redis     │◄───────────────────┘
-  │  prices      │   │  signals     │
-  │  signals     │   │  agent cache │
-  │  rankings    │   └──────────────┘
-  │  macro data  │
-  └──────────────┘
-        ▲
-        │
-  yfinance · FRED · RSS feeds · Tavily (live search)
-```
-
-### Agent system
-
-```
-  Commodity agents (×3)          Stock sector agents (×5)         Cross-cutting (×3)
-  ─────────────────────          ─────────────────────────         ──────────────────
-  energy_commodities             tech_comms_stocks                 macro_rates
-  metals                         healthcare_stocks                 geopolitics
-  agriculture                    financials_stocks                 sentiment_news
-                                 cyclicals_stocks
-                                 defensives_stocks
-
-                        all 11 run in parallel
-                                 │
-                                 ▼
-                    ┌────────────────────────┐
-                    │      Overseer Agent     │
-                    │  reads all 11 reports   │
-                    │  cross-checks ML signals│
-                    │  STRONG_BUY/BUY/HOLD/   │
-                    │  AVOID + reasoning      │
-                    └────────────────────────┘
-```
-
-Each agent has 6 tools: `web_search` (Tavily), `get_commodity_signals`, `get_stock_rankings`, `get_macro_indicators`, `get_price_history`, `get_sentiment_scores`.
+- Agent analysis UI (the backend works, there's no way to use it from the app)
+- Agent scheduling (currently manual trigger only)
+- Agent memory (agents don't remember past runs)
+- Vector DB for knowledge retrieval
+- COT, EIA, USDA data sources
+- Event-driven triggering (currently scheduled, not reactive)
+- Debate layer for high-stakes calls
+- Outcome tracking and agent calibration
+- Risk layer combining ML sizing with agent conviction
+- Alerts
 
 ---
 
 ## Build plan
 
-### Phase 1 — Agent Analysis UI
+### Phase 1 — Agent UI (2-3 weeks)
 
-**What:** A dedicated page where you trigger an agent analysis run, watch job progress, and read the overseer's recommendations and each sub-agent's reasoning.
+The backend is complete. The gap is a frontend to actually use it.
 
-**Why this is next:** The entire agent backend is built and working. The only missing piece is a way to actually use it without curling an API.
+Build an `/agent-analysis` page with a button to trigger a run, live job progress polling, and a results view. The results view needs two components: an `OverseerCard` that shows the final verified trades table (ticker, recommendation, conviction, supporting themes, risk factors, suggested action) and a `SubAgentAccordion` that lets you drill into each agent's reasoning, see which ML signals they agreed or disagreed with, and read their news highlights. Add the page to the nav.
 
-**What to build:**
-
-1. `AgentAnalysisPage` at `/agent-analysis`
-   - "Run Analysis" button → `POST /api/agent-analysis` → get `job_id`
-   - Live polling via `useJob` hook (already exists) → progress bar
-   - On completion: render results
-
-2. `OverseerCard` component
-   - Market overview text
-   - `verified_trades` list: recommendation badge (`STRONG_BUY` / `BUY` / `HOLD` / `AVOID`), conviction level, supporting themes, risk factors, suggested action
-   - `top_risks` and `cross_asset_themes` sections
-
-3. `SubAgentAccordion` component
-   - Collapsible panel per sub-agent (11 total)
-   - Shows: summary, signals reviewed (ticker + ML signal + agent view + conviction), news highlights
-   - Visual indicator: agree/cautious/disagree vs ML signal
-
-4. Navigation: add "Agent Analysis" to the top nav in `App.tsx`
-
-**Endpoints to consume:**
+Endpoints:
 ```
-POST /api/agent-analysis              → { job_id, status, name }
-GET  /api/jobs/{job_id}               → poll until completed/failed
-GET  /api/agent-analysis/latest       → full result (sub_reports + overseer.parsed)
-GET  /api/agent-analysis/meta         → { generated_at, success counts }
+POST /api/agent-analysis        trigger a run, get job_id
+GET  /api/jobs/{job_id}         poll until completed or failed
+GET  /api/agent-analysis/latest full result
+GET  /api/agent-analysis/meta   run timestamp and success counts
 ```
 
-**Estimated effort:** 2–3 days for both components and the page wiring.
+### Phase 2 — Memory and scheduling (2-3 weeks)
+
+Two things that change the quality of every run from here on.
+
+Agent scheduling: add `agent_analysis_daily` to APScheduler, running Mon-Fri at 08:00 NY after the ML refresh at 07:15. Persist overseer recommendations to a new `agent_recommendations` DB table so there's a permanent record.
+
+Vector DB memory: add Chroma to the stack. Embed every agent analysis on completion. Give agents a `search_memory` tool so they can query their own history — what did the energy agent conclude the last three times OPEC met, what happened to copper when Chinese PMI came in below 50. This is the single highest-leverage improvement to recommendation quality.
+
+### Phase 3 — Better data sources (2-3 weeks)
+
+Free, high-signal data that directly improves what agents can reason about.
+
+CFTC Commitment of Traders data: weekly positioning for every major futures market, showing whether large speculators and commercials are long or short. One of the most predictive inputs for commodity signals and completely free. EIA weekly inventory reports for crude and natural gas storage. USDA crop reports for agricultural commodities. Earnings calendar so stock agents know what's reporting before each run. Economic calendar (FOMC dates, CPI, NFP, PCE) for the macro agent.
+
+### Phase 4 — Event-driven triggering (3-4 weeks)
+
+Move from scheduled to reactive.
+
+Build a lightweight event bus. Define trigger rules: price move exceeds threshold, news volume spikes, scheduled data release fires. Agents subscribe to events relevant to their domain. A crude oil spike triggers the energy agent and the geopolitics agent immediately, not at the next scheduled run. The overseer re-evaluates affected positions. An alert system sends a notification when STRONG_BUY or AVOID is issued.
+
+### Phase 5 — Debate layer and calibration (3-4 weeks)
+
+Quality control on high-stakes calls and a feedback loop that makes the system improve over time.
+
+For any STRONG_BUY or AVOID, spawn a bull case agent and a bear case agent for that specific ticker. Each argues its position with evidence. The overseer reads both and makes the final call, with the full debate visible. This catches blind spots that a single agent writing up a BUY case will miss.
+
+Outcome tracking: nightly job that checks the price at T+5d, T+10d, and T+21d against each recommendation. Per-agent accuracy dashboard: win rate by conviction level, by asset class, over time. The overseer dynamically weights agents based on calibrated accuracy. Agents that are consistently right get more weight.
+
+### Phase 6 — ML improvements (ongoing)
+
+Can be worked on alongside any other phase.
+
+Replace the binary BUY/HOLD classifier with probabilistic outputs: expected return, confidence interval, downside risk. Regime-conditional models: train separate models for bear, bull, and high-volatility regimes. Cross-asset features: copper into industrials, oil into airlines and consumer spending, yield curve shape into financials. Factor decomposition for stocks so agents understand whether a high-ranked stock is a momentum trade or a quality defensive. COT data as ML features once Phase 3 data is in.
+
+### Phase 7 — Risk layer (when signals are trusted)
+
+Turn recommendations into a coherent portfolio.
+
+Unified position sizing that combines the ML expected return with the overseer conviction level. Portfolio-level exposure limits: max percentage per sector, max percentage in commodities versus equities. Correlation-aware allocation so the portfolio isn't five things that move together. Stop-loss tracking that flags positions moving against the recommendation.
 
 ---
 
-### Phase 2 — Agent Scheduling + Outcome Tracking
+## Architecture
 
-**What:** Run agents automatically every day after the ML refresh, and track whether their recommendations were correct.
+```
+                    EVENTS
+                    price thresholds / scheduled releases / news spikes
+                           |
+               AGENT MEMORY (vector DB)
+               past analyses / market events / outcomes
+                           |
+                    SPECIALIST AGENTS (x11, parallel)
+                    domain tools + memory retrieval
+                           |
+                    DEBATE LAYER
+                    bull vs bear for strong calls
+                           |
+                    OVERSEER
+                    synthesis + calibrated weighting
+                           |
+                    RISK LAYER
+                    position sizing + portfolio limits
+                           |
+                    RECOMMENDATION
+                    ticker / size / horizon / conviction / reasoning
+                           |
+                    OUTCOME TRACKER
+                    feeds back to calibration
+```
 
-**Why:** Right now you have to manually trigger it. Once you trust the system, you want it running without thought. Outcome tracking is what lets you improve and calibrate it.
+Current agent roster:
 
-**What to build:**
-
-1. Add `agent_analysis_daily` to APScheduler in `scheduler.py`
-   - Mon–Fri 08:00 NY (after stock refresh at 07:15)
-   - Calls the same `run_agent_pipeline` function
-
-2. New DB table `agent_recommendations` to persist overseer output:
-   ```sql
-   CREATE TABLE agent_recommendations (
-       id          SERIAL PRIMARY KEY,
-       ticker      VARCHAR(16),
-       asset_class VARCHAR(16),
-       recommendation VARCHAR(16),
-       conviction  VARCHAR(8),
-       generated_at TIMESTAMPTZ,
-       run_id      VARCHAR(64)
-   );
-   ```
-
-3. Outcome tracker: nightly job that looks up price at T+5d, T+10d, T+21d for each recommendation and computes win/loss
-
-4. Agent performance widget on the analysis page: rolling win rate, average conviction accuracy
-
-**Estimated effort:** 3–4 days split across backend (scheduler + DB) and frontend (performance widget).
-
----
-
-### Phase 3 — Portfolio & Risk Management
-
-**What:** Turn overseer recommendations into an actual managed portfolio with position sizing and risk guardrails.
-
-**What to build:**
-
-- Combine Kelly fraction (existing ML output) with overseer conviction level for final position size
-- Portfolio-level limits: max % per sector, max % commodities vs equities
-- Stop-loss logic: flag a position if price moves against recommendation by a configurable threshold
-- New page: `/portfolio-combined` showing the agent-recommended portfolio vs current ML-only portfolio
+```
+Commodity               Stocks (top-N per sector)       Cross-cutting
+---------               -------------------------       -------------
+energy_commodities      tech_comms_stocks               macro_rates
+metals                  healthcare_stocks               geopolitics
+agriculture             financials_stocks               sentiment_news
+                        cyclicals_stocks
+                        defensives_stocks
+```
 
 ---
 
-### Phase 4 — Agent Intelligence Improvements
+## Running it
 
-Things that will meaningfully improve recommendation quality:
-
-- **Earnings calendar**: feed upcoming earnings dates to stock agents before each run
-- **Economic calendar**: give `macro_rates` agent scheduled release dates (FOMC, CPI, NFP)
-- **Sector ETF momentum**: give each stock agent their benchmark ETF (XLK, XLF, etc.) as baseline context
-- **Agent memory**: persist each agent's past assessments so the overseer can reference their track record
-- **Options data**: IV surface and put/call ratios as additional context for `sentiment_news`
-
----
-
-### Phase 5 — Production Hardening
-
-Before sharing with anyone outside the two of you:
-
-- Per-user API keys + rate limiting
-- Alerts: Slack/email when overseer issues STRONG_BUY or AVOID
-- Cost monitoring: track Anthropic + Tavily API spend
-- Commodity model performance page (backtests exist in DB, no UI yet)
-
----
-
-## Quick start
-
-**Prerequisites:** Docker Desktop, Node 18+, an `.env` (copy from `.env.example`).
+Prerequisites: Docker Desktop, an `.env` copied from `.env.example`.
 
 ```bash
-# 1. Start Postgres, Redis, backend, frontend
 docker compose up -d --build
-
-# 2. Apply database schema
 docker compose exec backend alembic upgrade head
-
-# 3. Bootstrap commodity data
 docker compose exec backend python -m app.scripts.initial_data_load
-
-# 4. Bootstrap stock data
 docker compose exec backend python -m scripts.refresh_sp500_universe
 docker compose exec backend python -m app.scripts.initial_stocks_load
-
-# 5. Train the stock ranker
 curl -X POST http://localhost:8000/api/stocks/retrain
 ```
 
 Open http://localhost:5173.
 
-**To run an agent analysis** (set `ANTHROPIC_API_KEY` in `.env` first):
+To run an agent analysis once `ANTHROPIC_API_KEY` is set:
 
 ```bash
-# Trigger (returns immediately with a job_id)
 curl -X POST http://localhost:8000/api/agent-analysis -H "X-API-Key: $API_KEY"
-
-# Poll until completed
 curl http://localhost:8000/api/jobs/{job_id}
-
-# Read the result
 curl http://localhost:8000/api/agent-analysis/latest
 ```
 
@@ -233,82 +186,35 @@ curl http://localhost:8000/api/agent-analysis/latest
 
 ## Environment variables
 
-```bash
-# Infrastructure
-DATABASE_URL=postgresql+asyncpg://advisor:password@postgres:5432/advisor
-REDIS_URL=redis://redis:6379
-
-# External data APIs
-FRED_API_KEY=...               # free at fred.stlouisfed.org
-
-# Agent pipeline
-ANTHROPIC_API_KEY=...          # required for /api/agent-analysis
-TAVILY_API_KEY=...             # optional — enables live web search in agents
-
-# Security (leave empty for local dev, set a long random string in production)
-API_KEY=...
-
-# Tuning
-AGENT_TOP_N_PER_SECTOR=10     # stocks per sector group surfaced to agents
-AGENT_MODEL=claude-sonnet-4-6
-AGENT_OVERSEER_MODEL=claude-sonnet-4-6
-SCHEDULER_ENABLED=true
-TIMEZONE=America/New_York
+```
+DATABASE_URL            postgresql+asyncpg connection string
+REDIS_URL               redis connection string
+FRED_API_KEY            free at fred.stlouisfed.org
+ANTHROPIC_API_KEY       required for agent analysis
+TAVILY_API_KEY          optional, enables live web search in agents
+API_KEY                 protects write endpoints, leave empty for local dev
+AGENT_TOP_N_PER_SECTOR  stocks per sector group shown to agents, default 10
+AGENT_MODEL             claude-sonnet-4-6
+AGENT_OVERSEER_MODEL    claude-sonnet-4-6
+SCHEDULER_ENABLED       true
+TIMEZONE                America/New_York
 ```
 
 ---
 
-## Repository layout
+## Stack
 
 ```
-project-winston/
-├── backend/
-│   ├── alembic/              database migrations
-│   ├── app/
-│   │   ├── agents/           multi-agent layer
-│   │   │   ├── tools.py        tool schemas + implementations (DB, Redis, Tavily)
-│   │   │   ├── base.py         shared agentic loop with tool_use handling
-│   │   │   ├── sub_agents.py   11 sub-agent definitions + parallel runner
-│   │   │   ├── overseer.py     overseer agent
-│   │   │   └── pipeline.py     orchestration → Redis cache
-│   │   ├── api/
-│   │   │   ├── agent_analysis.py  POST/GET agent analysis endpoints
-│   │   │   ├── jobs.py            job status polling
-│   │   │   └── stocks.py          stock rankings/portfolio endpoints
-│   │   ├── constants.py      commodity tickers + Redis key names
-│   │   ├── constants_stocks.py
-│   │   ├── core/             config, Redis client, API key security
-│   │   ├── data/             yfinance fetchers, FRED loader, RSS/FinBERT sentiment
-│   │   ├── db/               SQLAlchemy models + upsert operations
-│   │   ├── ml/               features, trainers, ranker, backtests, HMM regime
-│   │   ├── scripts/          bootstrap scripts
-│   │   ├── services/         signals_service, stocks_service
-│   │   └── main.py           FastAPI app + commodity routes
-│   └── tests/
-├── frontend/
-│   └── src/
-│       ├── api/              axios client + TypeScript types
-│       ├── components/       SignalCard, PageState
-│       ├── pages/            Dashboard, StocksDashboard, StocksPortfolio, etc.
-│       └── App.tsx           routes + navigation
-└── docker-compose.yml
+Backend         Python 3.12, FastAPI, SQLAlchemy async, Alembic
+ML              XGBoost, LightGBM, scikit-learn, hmmlearn, vectorbt, SHAP
+Agents          Claude via Anthropic async SDK
+Search          Tavily
+Sentiment       FinBERT (HuggingFace)
+Database        PostgreSQL 16
+Cache           Redis
+Frontend        React 18, TypeScript, TailwindCSS, Vite
+Infra           Docker Compose, GitHub Actions CI
 ```
-
----
-
-## Tech stack
-
-| Layer | Technology |
-|---|---|
-| Backend | Python 3.12, FastAPI, SQLAlchemy (async), Alembic |
-| ML models | XGBoost, LightGBM, scikit-learn, hmmlearn, vectorbt, SHAP |
-| Agents | Claude (claude-sonnet-4-6) via Anthropic SDK (async) |
-| Live search | Tavily |
-| Sentiment NLP | FinBERT (HuggingFace transformers) |
-| Database | PostgreSQL 16 |
-| Cache | Redis |
-| Frontend | React 18, TypeScript, TailwindCSS, Vite |
-| Deployment | Docker Compose |
 
 ---
 
@@ -318,4 +224,4 @@ project-winston/
 docker compose exec backend pytest tests/ -v
 ```
 
-19 tests covering: data quality guards, panel feature shape/targets/sector z-scores, walk-forward fold integrity, sector-cap behaviour, portfolio backtester end-to-end.
+19 tests covering data quality guards, feature shape and targets, walk-forward fold integrity, sector cap behaviour, and the portfolio backtester end-to-end.

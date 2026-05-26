@@ -232,4 +232,24 @@ def train_one_horizon_sync(
     final_model.fit(x_final, y_final)
     payload = {"model": final_model, "feature_cols": feature_cols, "target": target_column}
     joblib.dump(payload, artifact_path(ticker, horizon))
+
+    # Regime-conditional sub-models (0=bear, 1=bull, 2=high-vol)
+    if "regime_label" in table.columns:
+        base_path = artifact_path(ticker, horizon)
+        for regime_k in [0, 1, 2]:
+            regime_rows = table[table["regime_label"] == regime_k]
+            if len(regime_rows) < 60:
+                continue
+            try:
+                y_r = regime_rows[target_column].astype(int).values.astype(int)
+                x_r = regime_rows[feature_cols].astype(float).values
+                spw_r = _scale_pos_weight(y_r)
+                regime_model = _wrap_calibrated(_build_stack(xgb_params, lgb_params, spw_r))
+                regime_model.fit(x_r, y_r)
+                regime_path = base_path.parent / f"{base_path.stem}__regime{regime_k}.joblib"
+                joblib.dump({"model": regime_model, "feature_cols": feature_cols, "n_samples": len(regime_rows)}, regime_path)
+                logger.info("%s %s regime%d sub-model saved (%d rows)", ticker, horizon, regime_k, len(regime_rows))
+            except Exception as exc:
+                logger.debug("Regime sub-model %s %s k=%d failed: %s", ticker, horizon, regime_k, exc)
+
     return oos_rows, run_rows, feature_cols

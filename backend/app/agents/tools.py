@@ -127,6 +127,142 @@ TOOL_SCHEMAS: list[dict] = [
             "required": ["tickers"],
         },
     },
+    {
+        "name": "get_fundamentals",
+        "description": (
+            "Get key fundamental data for a stock ticker via yfinance: P/E (trailing and forward), "
+            "EV/EBITDA, PEG ratio, profit/operating margins, revenue growth YoY, earnings growth YoY, "
+            "beta, 52-week range, current price, market cap. Use for valuation context on any stock pick."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL, NVDA)"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_earnings_calendar",
+        "description": (
+            "Get the next earnings date for a ticker and historical beat/miss rate over last 8 quarters. "
+            "Use to identify upcoming catalyst events and assess track record."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_estimate_revisions",
+        "description": (
+            "Get analyst upgrade/downgrade activity for a ticker over the last 90 days. "
+            "Returns upgrade count, downgrade count, and revision trend direction. "
+            "Persistent upgrade momentum is one of the strongest stock selection signals."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_options_context",
+        "description": (
+            "Get options market context for a ticker: ATM implied volatility, 30-day historical volatility, "
+            "IV/HV ratio (proxy for whether a catalyst is already priced in), and put/call volume ratio. "
+            "IV/HV > 1.3 means expensive options (catalyst priced in). IV/HV < 0.8 means cheap options (not priced in)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_insider_activity",
+        "description": (
+            "Get recent insider transaction activity for a ticker over the last 90 days. "
+            "Returns buy/sell counts and net sentiment. Cluster buying by insiders is a strong bullish signal."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker symbol"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_cot_positioning",
+        "description": (
+            "Get CFTC Commitment of Traders positioning data for a commodity ticker. "
+            "Shows speculator (money manager) net long/short positioning and commercial hedger positioning. "
+            "Extreme speculator positioning (>80% long or <20% long) is a contrarian signal."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Commodity ticker (e.g. CL=F, GC=F, ZC=F)",
+                },
+                "weeks": {
+                    "type": "integer",
+                    "description": "Number of weeks of history (default 26)",
+                    "default": 26,
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "search_memory",
+        "description": (
+            "Search past agent analyses stored in memory. Use this to recall what previous runs concluded "
+            "about specific tickers, sectors, or macro themes. Helps identify persistent themes, "
+            "recurring risks, or whether a trade idea has been tried before."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query — ticker, sector, theme, or event (e.g. 'gold FOMC', 'NVDA AI spending')",
+                },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Optional: filter to a specific agent's past analyses",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_economic_calendar",
+        "description": (
+            "Get upcoming high-impact economic events (FOMC, CPI, NFP, PCE) in the next 30 days. "
+            "Use to check if a catalyst play has a macro landmine before entry."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Days ahead to look (default 30)",
+                    "default": 30,
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -285,6 +421,321 @@ async def _get_sentiment_scores(tickers: list[str], session: AsyncSession) -> li
     return result
 
 
+async def _get_fundamentals(ticker: str) -> dict:
+    import yfinance as yf
+
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        mcap = info.get("marketCap")
+        return {
+            "ticker": ticker,
+            "name": info.get("longName"),
+            "sector": info.get("sector"),
+            "market_cap_b": round(mcap / 1e9, 2) if mcap else None,
+            "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+            "pe_trailing": info.get("trailingPE"),
+            "pe_forward": info.get("forwardPE"),
+            "ev_ebitda": info.get("enterpriseToEbitda"),
+            "peg_ratio": info.get("pegRatio"),
+            "profit_margin_pct": round(info["profitMargins"] * 100, 1) if info.get("profitMargins") else None,
+            "operating_margin_pct": round(info["operatingMargins"] * 100, 1) if info.get("operatingMargins") else None,
+            "revenue_growth_yoy_pct": round(info["revenueGrowth"] * 100, 1) if info.get("revenueGrowth") else None,
+            "earnings_growth_yoy_pct": round(info["earningsGrowth"] * 100, 1) if info.get("earningsGrowth") else None,
+            "beta": info.get("beta"),
+            "week_52_high": info.get("fiftyTwoWeekHigh"),
+            "week_52_low": info.get("fiftyTwoWeekLow"),
+            "pct_from_52w_high": (
+                round((info["currentPrice"] / info["fiftyTwoWeekHigh"] - 1) * 100, 1)
+                if info.get("currentPrice") and info.get("fiftyTwoWeekHigh")
+                else None
+            ),
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.warning("get_fundamentals failed for %s: %s", ticker, exc)
+        return {"error": str(exc), "ticker": ticker}
+
+
+async def _get_earnings_calendar(ticker: str) -> dict:
+    import yfinance as yf
+
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker)
+        # next earnings date
+        next_date = None
+        try:
+            cal = t.calendar
+            if cal is not None and not cal.empty and "Earnings Date" in cal.index:
+                val = cal.loc["Earnings Date"]
+                next_date = str(val.iloc[0])[:10] if hasattr(val, "iloc") else str(val)[:10]
+        except Exception:
+            pass
+
+        # historical beat rate
+        beat, total = 0, 0
+        try:
+            hist = t.earnings_history
+            if hist is not None and not hist.empty:
+                for _, row in hist.iterrows():
+                    est = row.get("epsEstimate")
+                    act = row.get("epsActual")
+                    if est is not None and act is not None and est != 0:
+                        total += 1
+                        if act > est:
+                            beat += 1
+        except Exception:
+            pass
+
+        days_until = None
+        if next_date:
+            try:
+                from datetime import date as date_type
+                nd = date_type.fromisoformat(next_date)
+                days_until = (nd - date_type.today()).days
+            except Exception:
+                pass
+
+        return {
+            "ticker": ticker,
+            "next_earnings_date": next_date,
+            "days_until_earnings": days_until,
+            "historical_beat_rate": round(beat / total, 2) if total > 0 else None,
+            "quarters_analyzed": total,
+            "is_earnings_within_4w": days_until is not None and 0 <= days_until <= 28,
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.warning("get_earnings_calendar failed for %s: %s", ticker, exc)
+        return {"error": str(exc), "ticker": ticker}
+
+
+async def _get_estimate_revisions(ticker: str) -> dict:
+    import yfinance as yf
+    from datetime import datetime as dt, timedelta
+
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker)
+        try:
+            upgrades = t.upgrades_downgrades
+        except Exception:
+            upgrades = None
+
+        if upgrades is None or upgrades.empty:
+            return {"ticker": ticker, "upgrades_90d": 0, "downgrades_90d": 0, "revision_trend": "no_data"}
+
+        cutoff = dt.now().astimezone() - timedelta(days=90)
+        try:
+            if upgrades.index.tz is None:
+                upgrades.index = upgrades.index.tz_localize("UTC")
+            recent = upgrades[upgrades.index >= cutoff]
+        except Exception:
+            recent = upgrades.tail(20)
+
+        up_grades = {"Buy", "Strong Buy", "Overweight", "Outperform", "Market Outperform"}
+        down_grades = {"Sell", "Strong Sell", "Underperform", "Underweight", "Market Underperform"}
+
+        ups = recent[recent.get("ToGrade", recent.get("Action", "")).isin(up_grades)].shape[0] if not recent.empty else 0
+        downs = recent[recent.get("ToGrade", recent.get("Action", "")).isin(down_grades)].shape[0] if not recent.empty else 0
+
+        if ups >= downs * 2 and ups >= 3:
+            trend = "strong_upgrade_momentum"
+        elif ups > downs:
+            trend = "upgrade_momentum"
+        elif downs >= ups * 2 and downs >= 3:
+            trend = "strong_downgrade_momentum"
+        elif downs > ups:
+            trend = "downgrade_momentum"
+        else:
+            trend = "neutral"
+
+        return {
+            "ticker": ticker,
+            "upgrades_90d": int(ups),
+            "downgrades_90d": int(downs),
+            "revision_trend": trend,
+            "recent_actions": recent[["Firm", "ToGrade"]].head(5).to_dict("records") if not recent.empty else [],
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.warning("get_estimate_revisions failed for %s: %s", ticker, exc)
+        return {"error": str(exc), "ticker": ticker}
+
+
+async def _get_options_context(ticker: str) -> dict:
+    import numpy as np
+    import yfinance as yf
+    from datetime import datetime as dt, timedelta
+
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if not current_price:
+            return {"ticker": ticker, "error": "no_price"}
+
+        exps = t.options
+        if not exps:
+            return {"ticker": ticker, "note": "no_options_listed"}
+
+        target = dt.now() + timedelta(days=30)
+        best_exp = min(exps, key=lambda x: abs((dt.strptime(x, "%Y-%m-%d") - target).days))
+
+        try:
+            chain = t.option_chain(best_exp)
+            calls = chain.calls.copy()
+            puts = chain.puts.copy()
+            calls["dist"] = (calls["strike"] - current_price).abs()
+            atm = calls.loc[calls["dist"].idxmin()]
+            atm_iv = float(atm["impliedVolatility"]) if atm["impliedVolatility"] > 0 else None
+            call_vol = float(calls["volume"].sum())
+            put_vol = float(puts["volume"].sum())
+            pc_ratio = round(put_vol / call_vol, 2) if call_vol > 0 else None
+        except Exception:
+            atm_iv, pc_ratio = None, None
+
+        try:
+            hist = t.history(period="60d")
+            if not hist.empty and len(hist) > 10:
+                rets = hist["Close"].pct_change().dropna()
+                hv30 = float(rets.std() * np.sqrt(252))
+            else:
+                hv30 = None
+        except Exception:
+            hv30 = None
+
+        iv_hv = round(atm_iv / hv30, 2) if (atm_iv and hv30 and hv30 > 0) else None
+        if iv_hv is None:
+            assessment = "insufficient_data"
+        elif iv_hv > 1.3:
+            assessment = "expensive_catalyst_likely_priced_in"
+        elif iv_hv < 0.8:
+            assessment = "cheap_catalyst_not_priced_in"
+        else:
+            assessment = "fairly_priced"
+
+        return {
+            "ticker": ticker,
+            "current_price": current_price,
+            "expiration_used": best_exp,
+            "atm_iv_pct": round(atm_iv * 100, 1) if atm_iv else None,
+            "hv30_pct": round(hv30 * 100, 1) if hv30 else None,
+            "iv_hv_ratio": iv_hv,
+            "iv_assessment": assessment,
+            "put_call_volume_ratio": pc_ratio,
+            "interpretation": (
+                "IV/HV > 1.3: market already pricing a big move, be cautious. "
+                "IV/HV < 0.8: market not pricing a move, good risk/reward if catalyst is real."
+            ),
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.warning("get_options_context failed for %s: %s", ticker, exc)
+        return {"error": str(exc), "ticker": ticker}
+
+
+async def _get_insider_activity(ticker: str) -> dict:
+    import yfinance as yf
+
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker)
+        try:
+            txns = t.insider_transactions
+        except Exception:
+            txns = None
+
+        if txns is None or txns.empty:
+            return {"ticker": ticker, "buys_90d": 0, "sells_90d": 0, "net_sentiment": "no_data"}
+
+        buy_kw = {"Buy", "Purchase", "Automatic Buy"}
+        sell_kw = {"Sale", "Sell", "Automatic Sale"}
+
+        txns_reset = txns.reset_index() if txns.index.name else txns
+        buys, sells = 0, 0
+        recent_list = []
+        for _, row in txns_reset.head(20).iterrows():
+            txt = str(row.get("Transaction") or row.get("Shares") or "")
+            shares = row.get("Shares", 0) or 0
+            if any(k.lower() in txt.lower() for k in buy_kw):
+                buys += 1
+            elif any(k.lower() in txt.lower() for k in sell_kw):
+                sells += 1
+            insider = row.get("Insider Trading") or row.get("Insider") or ""
+            recent_list.append({"insider": str(insider)[:40], "transaction": txt[:30], "shares": int(shares) if shares else None})
+
+        if buys > sells * 2 and buys >= 2:
+            net = "strong_insider_buying"
+        elif buys > sells:
+            net = "net_insider_buying"
+        elif sells > buys * 2 and sells >= 2:
+            net = "strong_insider_selling"
+        elif sells > buys:
+            net = "net_insider_selling"
+        else:
+            net = "neutral"
+
+        return {
+            "ticker": ticker,
+            "buys_90d": buys,
+            "sells_90d": sells,
+            "net_sentiment": net,
+            "recent_transactions": recent_list[:5],
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.warning("get_insider_activity failed for %s: %s", ticker, exc)
+        return {"error": str(exc), "ticker": ticker}
+
+
+async def _get_cot_positioning(ticker: str, weeks: int, session: AsyncSession) -> dict:
+    from app.data.cot_fetcher import get_cot_history, get_latest_cot
+    latest = await get_latest_cot(session, ticker)
+    history = await get_cot_history(session, ticker, weeks=weeks)
+    if not latest:
+        return {"ticker": ticker, "note": "No COT data available. Run COT ingestion first."}
+    spec_pct = latest.get("spec_pct_long")
+    if spec_pct is not None:
+        if spec_pct >= 0.8:
+            positioning_signal = "EXTREME_LONG — contrarian bearish signal"
+        elif spec_pct >= 0.65:
+            positioning_signal = "CROWDED_LONG — caution"
+        elif spec_pct <= 0.2:
+            positioning_signal = "EXTREME_SHORT — contrarian bullish signal"
+        elif spec_pct <= 0.35:
+            positioning_signal = "CROWDED_SHORT — potential squeeze"
+        else:
+            positioning_signal = "NEUTRAL"
+    else:
+        positioning_signal = "unknown"
+    return {
+        "ticker": ticker,
+        "latest": latest,
+        "positioning_signal": positioning_signal,
+        "history_weeks": len(history),
+        "recent_4w": history[-4:] if len(history) >= 4 else history,
+    }
+
+
+async def _search_memory(query: str, agent_name: str | None, session: AsyncSession) -> list[dict]:
+    from app.agents.memory import search_memory
+    return await search_memory(session, query, agent_name=agent_name, limit=5)
+
+
+async def _get_economic_calendar(days: int, session: AsyncSession) -> list[dict]:
+    from app.data.calendar_fetcher import get_upcoming_economic_events
+    return await get_upcoming_economic_events(session, days=days)
+
+
 async def execute_tool(name: str, inputs: dict, ctx: ToolContext) -> Any:
     if name == "web_search":
         return await _web_search(inputs.get("query", ""), inputs.get("max_results", 5))
@@ -300,4 +751,20 @@ async def execute_tool(name: str, inputs: dict, ctx: ToolContext) -> Any:
         return await _get_price_history(inputs.get("ticker", ""), inputs.get("days", 30), ctx.session)
     if name == "get_sentiment_scores":
         return await _get_sentiment_scores(inputs.get("tickers", []), ctx.session)
+    if name == "get_fundamentals":
+        return await _get_fundamentals(inputs.get("ticker", ""))
+    if name == "get_earnings_calendar":
+        return await _get_earnings_calendar(inputs.get("ticker", ""))
+    if name == "get_estimate_revisions":
+        return await _get_estimate_revisions(inputs.get("ticker", ""))
+    if name == "get_options_context":
+        return await _get_options_context(inputs.get("ticker", ""))
+    if name == "get_insider_activity":
+        return await _get_insider_activity(inputs.get("ticker", ""))
+    if name == "get_cot_positioning":
+        return await _get_cot_positioning(inputs.get("ticker", ""), inputs.get("weeks", 26), ctx.session)
+    if name == "search_memory":
+        return await _search_memory(inputs.get("query", ""), inputs.get("agent_name"), ctx.session)
+    if name == "get_economic_calendar":
+        return await _get_economic_calendar(inputs.get("days", 30), ctx.session)
     return {"error": f"Unknown tool: {name}"}

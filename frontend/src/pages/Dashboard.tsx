@@ -1,25 +1,24 @@
-/** Dashboard: signal grids, regime summary, manual refresh, BUY-only filter. */
-
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
   ApiClientError,
+  getEconomicEvents,
   getMeta,
+  getPortfolioRisk,
+  getPriceTriggers,
   getSignals,
-  triggerRefresh,
   triggerRefreshAsync,
 } from "../api/client";
-import type { SignalPayload } from "../api/types.generated";
-import { CardSkeletonGrid, PageState } from "../components/PageState";
-import { SignalCard } from "../components/SignalCard";
+import type { EconomicEvent, PortfolioRiskSummary, PriceTriggerEvent, SignalPayload } from "../api/types.generated";
+import { PageState } from "../components/PageState";
 import { useJob } from "../hooks/useJob";
+import { useLivePrices } from "../hooks/useLivePrices";
+import { isMarketHours } from "../utils/marketHours";
 
 function errMsg(e: unknown): string {
-  if (e instanceof ApiClientError) {
-    return e.message;
-  }
+  if (e instanceof ApiClientError) return e.message;
   return "Unexpected error";
 }
 
@@ -27,10 +26,139 @@ function isoFromMeta(meta: { last_refresh?: string; refreshed_at?: string } | nu
   return meta?.last_refresh ?? meta?.refreshed_at;
 }
 
+function SignalBadge({ signal }: { signal: string }) {
+  if (signal === "BUY") {
+    return (
+      <span className="font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border border-secondary/30 bg-secondary/10 text-secondary">
+        BUY
+      </span>
+    );
+  }
+  return (
+    <span className="font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border border-outline-variant text-on-surface-variant">
+      HOLD
+    </span>
+  );
+}
+
+function ConvictionBar({ value }: { value: number }) {
+  const width = Math.round(Math.min(Math.max(value, 0), 1) * 100);
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-16 h-1 bg-surface-container-high rounded-none overflow-hidden">
+        <div
+          className="h-full bg-secondary"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      <span className="font-mono text-[11px] text-on-surface-variant tabular-nums">{value.toFixed(2)}</span>
+    </div>
+  );
+}
+
+function ExposureBar({ label, value, max }: { label: string; value: number; max: number }) {
+  const pct = Math.round(Math.min((value / max) * 100, 100));
+  const overLimit = value > max;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-on-surface-variant w-20 shrink-0">{label}</span>
+      <div className="flex-1 h-1.5 bg-surface-container-high overflow-hidden">
+        <div className={`h-full ${overLimit ? "bg-error" : "bg-secondary"}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className={`font-mono text-[10px] tabular-nums w-10 text-right ${overLimit ? "text-error" : "text-on-surface"}`}>
+        {(value * 100).toFixed(1)}%
+      </span>
+    </div>
+  );
+}
+
+function PortfolioExposure({ risk }: { risk: PortfolioRiskSummary }) {
+  const sectors = Object.entries(risk.by_sector);
+  return (
+    <div className="border border-outline-variant bg-surface-container px-4 py-3 space-y-2">
+      <div className="flex items-center justify-between mb-1">
+        <p className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant">Portfolio Exposure</p>
+        <p className="font-mono text-[9px] text-on-surface-variant opacity-60">{risk.buy_count} BUY · total {(risk.total_exposure_pct * 100).toFixed(1)}%</p>
+      </div>
+      <ExposureBar label="Commodities" value={risk.commodity_exposure_pct} max={risk.limits.max_commodity_pct} />
+      <ExposureBar label="Equities" value={risk.equity_exposure_pct} max={risk.limits.max_equity_pct} />
+      {sectors.map(([sector, exp]) => (
+        <ExposureBar key={sector} label={sector} value={exp} max={risk.limits.max_sector_pct} />
+      ))}
+      {risk.risk_flagged.length > 0 && (
+        <div className="pt-1 flex flex-wrap gap-1">
+          {risk.risk_flagged.map((t) => (
+            <span key={t} className="font-mono text-[9px] px-1.5 py-0.5 border border-error/30 bg-error/10 text-error">{t}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PriceTriggerStrip({ triggers }: { triggers: PriceTriggerEvent[] }) {
+  if (triggers.length === 0) return null;
+  return (
+    <div className="border border-outline-variant bg-surface-container px-4 py-2.5 flex items-center gap-4 overflow-x-auto">
+      <span className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant shrink-0">
+        <span className="material-symbols-outlined text-[11px] leading-none mr-1 align-middle">electric_bolt</span>
+        Price Events
+      </span>
+      <div className="flex items-center gap-2">
+        {triggers.slice(0, 10).map((t, i) => {
+          const up = t.direction === "above";
+          return (
+            <div
+              key={i}
+              className={`shrink-0 flex items-center gap-1 px-2 py-0.5 border font-mono text-[9px] ${
+                up
+                  ? "border-secondary/40 bg-secondary/10 text-secondary"
+                  : "border-error/40 bg-error/10 text-error"
+              }`}
+              title={`${t.name}: ${t.latest_price.toFixed(2)} vs SMA ${t.sma_20d.toFixed(2)} · ${new Date(t.triggered_at).toLocaleString()}`}
+            >
+              <span className="material-symbols-outlined text-[10px] leading-none">
+                {up ? "arrow_upward" : "arrow_downward"}
+              </span>
+              <span className="font-bold">{t.ticker.replace("=F", "")}</span>
+              <span className="opacity-70">{up ? "+" : ""}{t.deviation_pct.toFixed(1)}%</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CalendarStrip({ events }: { events: EconomicEvent[] }) {
+  if (events.length === 0) return null;
+  const typeColor: Record<string, string> = {
+    FOMC: "text-error border-error/40 bg-error/10",
+    CPI: "text-warning border-warning/40 bg-warning/10",
+    NFP: "text-secondary border-secondary/40 bg-secondary/10",
+  };
+  return (
+    <div className="border border-outline-variant bg-surface-container px-4 py-2.5 flex items-center gap-4 overflow-x-auto">
+      <span className="font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-on-surface-variant shrink-0">Upcoming</span>
+      <div className="flex items-center gap-3">
+        {events.slice(0, 8).map((e, i) => (
+          <div key={i} className={`shrink-0 flex items-center gap-1.5 px-2 py-0.5 border font-mono text-[9px] ${typeColor[e.event_type] ?? "text-on-surface-variant border-outline-variant"}`}>
+            <span className="font-bold">{e.event_type}</span>
+            <span className="opacity-70">{new Date(e.event_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard(): ReactElement {
   const navigate = useNavigate();
   const [signals, setSignals] = useState<SignalPayload[] | null>(null);
   const [metaIso, setMetaIso] = useState<string | undefined>(undefined);
+  const [calEvents, setCalEvents] = useState<EconomicEvent[]>([]);
+  const [portfolioRisk, setPortfolioRisk] = useState<PortfolioRiskSummary | null>(null);
+  const [priceTriggers, setPriceTriggers] = useState<PriceTriggerEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [buyOnly, setBuyOnly] = useState(false);
@@ -41,17 +169,22 @@ export default function Dashboard(): ReactElement {
     setLoading(true);
     setError(null);
     try {
-      const [sig, metaTry] = await Promise.all([
+      const [sig, metaTry, cal, risk, triggers] = await Promise.all([
         getSignals(),
         getMeta().catch(() => null),
+        getEconomicEvents(60).catch(() => [] as EconomicEvent[]),
+        getPortfolioRisk().catch(() => null),
+        getPriceTriggers().catch(() => [] as PriceTriggerEvent[]),
       ]);
       setSignals(sig);
       setMetaIso(isoFromMeta(metaTry));
+      setCalEvents(cal);
+      setPortfolioRisk(risk);
+      setPriceTriggers(triggers);
     } catch (e) {
       const code = errMsg(e);
       if (code.includes("503") || code.includes("cache empty")) {
         setSignals([]);
-        setError(null);
       } else {
         setError(code);
       }
@@ -60,40 +193,34 @@ export default function Dashboard(): ReactElement {
     }
   }, []);
 
+  useEffect(() => { void load(); }, [load]);
+
+  // Auto-refresh price triggers every 5 min during market hours
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  const regimeSummary = useMemo(() => {
-    if (!signals?.length) {
-      return "—";
-    }
-    let t = 0;
-    let m = 0;
-    let h = 0;
-    for (const s of signals) {
-      if (s.regime === 1) {
-        t += 1;
-      } else if (s.regime === 2) {
-        h += 1;
-      } else {
-        m += 1;
+    const id = setInterval(() => {
+      if (isMarketHours()) {
+        getPriceTriggers().then(setPriceTriggers).catch(() => {});
       }
-    }
-    return `${t} trending · ${m} mean-reverting · ${h} high-volatility (of ${signals.length} loaded)`;
-  }, [signals]);
+    }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
-  const buys = useMemo(() => {
-    const list = (signals ?? []).filter((s) => s.signal === "BUY");
-    return [...list].sort((a, b) => b.avg_confidence - a.avg_confidence);
-  }, [signals]);
+  const signalTickers = useMemo(() => (signals ?? []).map((s) => s.ticker), [signals]);
+  const livePrices = useLivePrices(signalTickers);
 
-  const holds = useMemo(() => {
-    const list = (signals ?? []).filter((s) => s.signal !== "BUY");
-    return [...list].sort((a, b) => b.avg_confidence - a.avg_confidence);
-  }, [signals]);
+  const rows = useMemo(() => {
+    const list = signals ?? [];
+    const filtered = buyOnly ? list.filter((s) => s.signal === "BUY") : list;
+    return [...filtered].sort((a, b) => {
+      if (a.signal === "BUY" && b.signal !== "BUY") return -1;
+      if (b.signal === "BUY" && a.signal !== "BUY") return 1;
+      return b.avg_confidence - a.avg_confidence;
+    });
+  }, [signals, buyOnly]);
 
-  const onManualRefresh = async () => {
+  const buyCt = useMemo(() => (signals ?? []).filter((s) => s.signal === "BUY").length, [signals]);
+
+  const onRefresh = async () => {
     resetJob();
     setRefreshing(true);
     setError(null);
@@ -106,131 +233,161 @@ export default function Dashboard(): ReactElement {
     }
   };
 
-  const onSyncRefresh = async () => {
-    resetJob();
-    setRefreshing(true);
-    setError(null);
-    try {
-      const res = await triggerRefresh();
-      setMetaIso(res.refreshed_at);
-      const sig = await getSignals();
-      setSignals(sig);
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  // When async refresh completes, pull fresh data.
   useEffect(() => {
     if (job && job.is_terminal) {
       setRefreshing(false);
-      if (job.state === "completed") {
-        void load();
-      }
+      if (job.state === "completed") void load();
     }
   }, [job, load]);
 
-  const emptyMsg =
-    signals && signals.length === 0
-      ? "No signals generated. Run a refresh from the Dashboard."
-      : null;
+  const marketOpen = isMarketHours();
+  const COLS = ["COMMODITY", "PRICE", "SIGNAL", "CONVICTION", "REGIME", "SENTIMENT", "UPDATED"];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8">
-      <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-50">Commodity Trading Advisor</h1>
-          <p className="mt-2 text-sm text-slate-400">Regime snapshot: {regimeSummary}</p>
-          <p className="mt-1 font-mono text-xs text-slate-500">
-            Last refresh: {metaIso ?? "unknown — run refresh"}
-          </p>
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">
+                {signals?.length ?? 0} commodities · {buyCt} BUY signals
+              </p>
+              {marketOpen ? (
+                <span className="flex items-center gap-1 font-mono text-[9px] font-bold uppercase tracking-widest text-secondary">
+                  <span className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse" />
+                  Live · 2 min
+                </span>
+              ) : (
+                <span className="font-mono text-[9px] text-on-surface-variant opacity-40 uppercase tracking-widest">Market closed</span>
+              )}
+            </div>
+            {metaIso && (
+              <p className="font-mono text-[10px] text-on-surface-variant opacity-60 mt-0.5">
+                Signals from: {new Date(metaIso).toLocaleString()}
+              </p>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+        <div className="flex items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-2">
             <input
               type="checkbox"
               checked={buyOnly}
               onChange={(e) => setBuyOnly(e.target.checked)}
-              className="rounded border-slate-600 bg-slate-900"
+              className="w-3 h-3 accent-secondary"
             />
-            BUY only
+            <span className="font-mono text-[10px] font-bold tracking-[0.06em] uppercase text-on-surface-variant">BUY Only</span>
           </label>
           <button
             type="button"
             disabled={refreshing || isPolling}
-            onClick={() => void onManualRefresh()}
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-            title="Async — kicks off a background job and polls"
+            onClick={() => void onRefresh()}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline font-mono text-[10px] font-bold tracking-[0.06em] uppercase transition-colors disabled:opacity-50"
           >
-            {isPolling || refreshing ? "Refreshing…" : "Refresh data"}
-          </button>
-          <button
-            type="button"
-            disabled={refreshing || isPolling}
-            onClick={() => void onSyncRefresh()}
-            className="hidden rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-50 md:inline-flex"
-            title="Sync — blocks until the refresh completes"
-          >
-            Sync refresh
+            <span className="material-symbols-outlined text-[14px] leading-none">refresh</span>
+            {isPolling || refreshing ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-      </header>
+      </div>
 
-      {(job || jobError) ? (
-        <div
-          className={`mt-4 rounded-md border p-3 text-xs ${
-            job?.state === "failed"
-              ? "border-red-700 bg-red-900/30 text-red-200"
-              : job?.state === "completed"
-                ? "border-emerald-700 bg-emerald-900/30 text-emerald-200"
-                : "border-slate-800 bg-slate-900/60 text-slate-300"
-          }`}
-        >
-          {jobError ? (
-            <span>Polling error: {jobError}</span>
-          ) : job ? (
+      {(job || jobError) && (
+        <div className={`border px-3 py-2 font-mono text-[11px] ${
+          job?.state === "failed"
+            ? "border-error/30 bg-error/10 text-error"
+            : job?.state === "completed"
+              ? "border-secondary/30 bg-secondary/10 text-secondary"
+              : "border-outline-variant text-on-surface-variant"
+        }`}>
+          {jobError ? `Polling error: ${jobError}` : job ? (
             <span>
-              <strong className="font-mono">{job.name}</strong>
-              <span className="mx-2 text-slate-500">·</span>
-              <span>{job.state}</span>
-              {job.message ? <span className="text-slate-400"> — {job.message}</span> : null}
-              {isPolling ? <span className="ml-2 animate-pulse text-slate-500">polling…</span> : null}
+              <strong>{job.name}</strong> · {job.state}
+              {job.message ? ` — ${job.message}` : ""}
+              {isPolling ? <span className="ml-2 animate-pulse opacity-60">polling…</span> : null}
             </span>
           ) : null}
         </div>
-      ) : null}
+      )}
 
-      {loading ? <CardSkeletonGrid count={9} /> : null}
+      <CalendarStrip events={calEvents} />
+      <PriceTriggerStrip triggers={priceTriggers} />
+      {portfolioRisk && <PortfolioExposure risk={portfolioRisk} />}
 
-      <PageState error={error} onRetry={() => void load()} emptyMessage={emptyMsg}>
-        {!loading && signals && signals.length > 0 ? (
-          <div className="mt-8 space-y-10">
-            {!buyOnly || buys.length > 0 ? (
-              <section>
-                <h2 className="mb-4 text-lg font-semibold text-emerald-300">BUY signals</h2>
-                {buys.length === 0 ? (
-                  <p className="text-sm text-slate-500">No BUY signals in the current batch.</p>
-                ) : (
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {buys.map((s) => (
-                      <SignalCard key={s.ticker} signal={s} muted={false} onOpen={(t) => navigate(`/commodity/${encodeURIComponent(t)}`)} />
-                    ))}
-                  </div>
-                )}
-              </section>
-            ) : null}
-            {!buyOnly ? (
-              <section>
-                <h2 className="mb-4 text-lg font-semibold text-slate-400">HOLD signals</h2>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {holds.map((s) => (
-                    <SignalCard key={s.ticker} signal={s} muted onOpen={(t) => navigate(`/commodity/${encodeURIComponent(t)}`)} />
+      <PageState error={error} onRetry={() => void load()} emptyMessage={!loading && signals?.length === 0 ? "No signals — run a refresh." : null}>
+        {loading ? (
+          <div className="border border-outline-variant">
+            <div className="border-b border-outline-variant bg-surface-container-high px-4 py-2 flex gap-8">
+              {COLS.map((c) => <div key={c} className="h-3 bg-surface-container-highest animate-pulse rounded" style={{ width: 60 }} />)}
+            </div>
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="border-b border-outline-variant px-4 py-3 flex gap-8">
+                {COLS.map((c) => <div key={c} className="h-3 bg-surface-container animate-pulse rounded" style={{ width: 80 }} />)}
+              </div>
+            ))}
+          </div>
+        ) : rows.length > 0 ? (
+          <div className="border border-outline-variant bg-surface-container overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="border-b border-outline-variant bg-surface-container-high">
+                <tr>
+                  {COLS.map((h) => (
+                    <th key={h} className="px-4 py-2.5 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant whitespace-nowrap">
+                      {h}
+                    </th>
                   ))}
-                </div>
-              </section>
-            ) : null}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-outline-variant">
+                {rows.map((s) => (
+                  <tr
+                    key={s.ticker}
+                    className="cursor-pointer hover:bg-surface-container-high transition-colors"
+                    onClick={() => navigate(`/commodity/${encodeURIComponent(s.ticker)}`)}
+                  >
+                    <td className="px-4 py-2.5">
+                      <div>
+                        <span className="font-mono text-[13px] font-semibold text-on-surface">{s.ticker}</span>
+                        <p className="font-mono text-[9px] text-on-surface-variant opacity-60 truncate max-w-[100px]">{s.name}</p>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono tabular-nums whitespace-nowrap">
+                      {(() => {
+                        const live = livePrices[s.ticker];
+                        const price = live ?? s.current_price;
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[13px] font-semibold text-on-surface">${price.toFixed(2)}</span>
+                            {live != null && (
+                              <span className="w-1 h-1 rounded-full bg-secondary animate-pulse shrink-0" title="Live price" />
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <SignalBadge signal={s.signal} />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <ConvictionBar value={s.avg_confidence} />
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-[10px] font-bold tracking-[0.06em] text-on-surface-variant">
+                      {s.regime_label ?? "—"}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className={`font-mono text-[11px] ${
+                        s.sentiment.label === "BULLISH" ? "text-secondary"
+                        : s.sentiment.label === "BEARISH" ? "text-error"
+                        : "text-on-surface-variant"
+                      }`}>
+                        {s.sentiment.label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-[10px] text-on-surface-variant whitespace-nowrap">
+                      {s.generated_at ? new Date(s.generated_at).toLocaleDateString() : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : null}
       </PageState>

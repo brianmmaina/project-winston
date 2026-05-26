@@ -4,11 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=["../.env", ".env"], extra="ignore")
 
     database_url: str = "postgresql+asyncpg://advisor:advisor@localhost:5432/commodity_advisor"
     redis_url: str = "redis://localhost:6379"
     fred_api_key: str = ""
+    eia_api_key: str = ""
     timezone: str = "America/New_York"
 
     scheduler_enabled: bool = True
@@ -29,6 +30,8 @@ class Settings(BaseSettings):
     agent_top_n_per_sector: int = 10
     agent_model: str = "claude-sonnet-4-6"
     agent_overseer_model: str = "claude-sonnet-4-6"
+    # Set to true to run the full agent pipeline (LLM costs) on schedule (Mon-Fri 09:00 NY).
+    agent_analysis_scheduled: bool = False
 
 
 @lru_cache

@@ -6,14 +6,25 @@
 
 import axios, { type AxiosError } from "axios";
 import type {
+  AgentAnalysisMeta,
+  AgentAnalysisResult,
   BacktestSummaryRow,
   BacktestStatsBlock,
   CommodityRow,
+  CotResponse,
+  DailyScan,
+  EarningsEvent,
+  EconomicEvent,
   HistoryBar,
   JobStartResponse,
   JobStatus,
+  MarketAlert,
   MetaResponse,
   ModelStatRow,
+  PaperPortfolioResponse,
+  PerformanceSummary,
+  PortfolioRiskSummary,
+  PriceTriggerEvent,
   RefreshResponse,
   RetrainResponse,
   SignalPayload,
@@ -38,12 +49,12 @@ export class ApiClientError extends Error {
   }
 }
 
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) ?? "";
 
 const http = axios.create({
   baseURL: BASE,
-  timeout: 30000,
+  timeout: 120000,
   validateStatus: () => true,
 });
 
@@ -127,6 +138,14 @@ export async function getCommodityHistory(ticker: string, days = 180): Promise<H
   return unwrapJson(http.get<HistoryBar[]>(`/api/commodities/${pathTicker(ticker)}/history?${q}`));
 }
 
+export async function getCommodityCot(ticker: string): Promise<CotResponse> {
+  return unwrapJson(http.get<CotResponse>(`/api/commodities/${pathTicker(ticker)}/cot`));
+}
+
+export async function getPortfolioRisk(): Promise<PortfolioRiskSummary> {
+  return unwrapJson(http.get<PortfolioRiskSummary>("/api/portfolio/risk"));
+}
+
 export async function getBacktestSummary(): Promise<BacktestSummaryRow[]> {
   return unwrapJson(http.get<BacktestSummaryRow[]>("/api/backtest"));
 }
@@ -208,4 +227,125 @@ export async function triggerStockRefresh(): Promise<StockJobResponse> {
 
 export async function triggerStockRetrain(): Promise<StockJobResponse> {
   return unwrapJson(http.post<StockJobResponse>("/api/stocks/retrain"));
+}
+
+// ---------------------------------------------------------------------------
+// Agent analysis
+// ---------------------------------------------------------------------------
+
+export async function triggerAgentAnalysis(): Promise<JobStartResponse> {
+  return unwrapJson(http.post<JobStartResponse>("/api/agent-analysis"));
+}
+
+export async function getAgentAnalysisLatest(): Promise<AgentAnalysisResult> {
+  return unwrapJson(http.get<AgentAnalysisResult>("/api/agent-analysis/latest"));
+}
+
+export async function getAgentAnalysisMeta(): Promise<AgentAnalysisMeta> {
+  return unwrapJson(http.get<AgentAnalysisMeta>("/api/agent-analysis/meta"));
+}
+
+export async function getAgentDailyScan(): Promise<DailyScan> {
+  return unwrapJson(http.get<DailyScan>("/api/agent-analysis/daily-scan"));
+}
+
+export async function triggerDailyScan(): Promise<{ status: string }> {
+  return unwrapJson(http.post<{ status: string }>("/api/agent-analysis/daily-scan"));
+}
+
+export async function getAgentPerformance(): Promise<PerformanceSummary> {
+  return unwrapJson(http.get<PerformanceSummary>("/api/agent-analysis/performance"));
+}
+
+export async function triggerOutcomeCheck(): Promise<{ status: string }> {
+  return unwrapJson(http.post<{ status: string }>("/api/agent-analysis/check-outcomes"));
+}
+
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+export async function getAlerts(limit = 50, unackedOnly = false): Promise<MarketAlert[]> {
+  const q = new URLSearchParams({ limit: String(limit), unacked_only: String(unackedOnly) });
+  return unwrapJson(http.get<MarketAlert[]>(`/api/alerts?${q}`));
+}
+
+export async function acknowledgeAlert(alertId: number): Promise<{ acknowledged: boolean }> {
+  return unwrapJson(http.post<{ acknowledged: boolean }>(`/api/alerts/${alertId}/acknowledge`));
+}
+
+export async function triggerAlertScan(): Promise<{ alerts_triggered: number }> {
+  return unwrapJson(http.post<{ alerts_triggered: number }>("/api/alerts/scan"));
+}
+
+// ---------------------------------------------------------------------------
+// Calendar
+// ---------------------------------------------------------------------------
+
+export async function getEconomicEvents(daysAhead = 30): Promise<EconomicEvent[]> {
+  const q = new URLSearchParams({ days_ahead: String(daysAhead) });
+  return unwrapJson(http.get<EconomicEvent[]>(`/api/calendar/economic?${q}`));
+}
+
+export async function getEarningsEvents(daysAhead = 14): Promise<EarningsEvent[]> {
+  const q = new URLSearchParams({ days_ahead: String(daysAhead) });
+  return unwrapJson(http.get<EarningsEvent[]>(`/api/calendar/earnings?${q}`));
+}
+
+export async function triggerEconomicIngest(): Promise<{ events_upserted: number }> {
+  return unwrapJson(http.post<{ events_upserted: number }>("/api/calendar/ingest/economic"));
+}
+
+export async function triggerEarningsIngest(): Promise<{ events_upserted: number }> {
+  return unwrapJson(http.post<{ events_upserted: number }>("/api/calendar/ingest/earnings"));
+}
+
+// ---------------------------------------------------------------------------
+// Price threshold events
+// ---------------------------------------------------------------------------
+
+export async function getPriceTriggers(): Promise<PriceTriggerEvent[]> {
+  const r = await unwrapJson<{ events: PriceTriggerEvent[]; count: number }>(http.get("/api/events/price-triggers"));
+  return r.events;
+}
+
+// ---------------------------------------------------------------------------
+// Paper trading
+// ---------------------------------------------------------------------------
+
+export async function getLivePrices(tickers: string[]): Promise<Record<string, number | null>> {
+  const q = new URLSearchParams({ tickers: tickers.join(",") });
+  return unwrapJson<Record<string, number | null>>(http.get(`/api/prices/live?${q}`));
+}
+
+export async function getPaperPortfolio(): Promise<PaperPortfolioResponse> {
+  return unwrapJson(http.get("/api/paper-trading/portfolio"));
+}
+
+export async function openPaperPosition(
+  ticker: string,
+  recommendation: "BUY" | "STRONG_BUY",
+  positionSizePct: number,
+  thesis?: string,
+): Promise<{ opened: string; entry_price: number; shares: number; position_size_pct: number }> {
+  return unwrapJson(
+    http.post("/api/paper-trading/open", {
+      ticker,
+      recommendation,
+      position_size_pct: positionSizePct,
+      thesis: thesis || null,
+    }),
+  );
+}
+
+export async function closePaperPosition(ticker: string): Promise<{ closed: string; pnl_pct: number | null }> {
+  return unwrapJson(http.post(`/api/paper-trading/close/${encodeURIComponent(ticker)}`));
+}
+
+export async function triggerPaperMtm(): Promise<{ updated: number; stopped_out: string[] }> {
+  return unwrapJson(http.post("/api/paper-trading/mark-to-market"));
+}
+
+export async function resetPaperPortfolio(): Promise<{ reset: boolean; initial_capital: number }> {
+  return unwrapJson(http.post("/api/paper-trading/reset"));
 }

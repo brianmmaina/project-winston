@@ -70,6 +70,17 @@ def _shap_rows(bundle: dict[str, Any], matrix: np.ndarray, columns: list[str]) -
         logger.debug("SHAP explain failed: %s", exc)
         return []
 
+def _load_regime_bundle(ticker: str, horizon: str, regime_k: int) -> dict[str, Any] | None:
+    base = artifact_path(ticker, horizon)
+    path = base.parent / f"{base.stem}__regime{regime_k}.joblib"
+    if not path.exists():
+        return None
+    try:
+        return joblib.load(path)
+    except Exception:
+        return None
+
+
 def build_signal_payload(
     ticker: str,
     _frame: pd.DataFrame,
@@ -81,6 +92,7 @@ def build_signal_payload(
     stats_block: dict[str, Any],
 ) -> dict[str, Any]:
     bundles = {"5d": load_bundle(ticker, "5d"), "10d": load_bundle(ticker, "10d"), "21d": load_bundle(ticker, "21d")}
+    current_regime = int(float(regime_label_value))
     probs: dict[str, float] = {}
     shap_union: list[dict[str, float]] = []
     for horizon, bundle in bundles.items():
@@ -89,9 +101,20 @@ def build_signal_payload(
             continue
         matrix, cols = _feature_matrix(bundle, latest_row)
         try:
-            probs[horizon] = _positives(bundle["model"], matrix)
+            global_prob = _positives(bundle["model"], matrix)
         except Exception:
-            probs[horizon] = 0.0
+            global_prob = 0.0
+        # Blend with regime sub-model if available and trained on enough samples
+        regime_bundle = _load_regime_bundle(ticker, horizon, current_regime)
+        if regime_bundle is not None and regime_bundle.get("n_samples", 0) >= 30:
+            try:
+                r_matrix, _ = _feature_matrix(regime_bundle, latest_row)
+                regime_prob = _positives(regime_bundle["model"], r_matrix)
+                probs[horizon] = round(0.6 * regime_prob + 0.4 * global_prob, 4)
+            except Exception:
+                probs[horizon] = global_prob
+        else:
+            probs[horizon] = global_prob
         shap_piece = _shap_rows(bundle, matrix, cols)
         if shap_piece:
             shap_union = shap_piece
@@ -106,6 +129,13 @@ def build_signal_payload(
     avg_win = float(stats_block.get("avg_win_pct", 0.0))
     avg_loss = float(stats_block.get("avg_loss_pct", 0.0))
     kelly_fraction = kelly_position_size(win_rate, avg_win, avg_loss) if label == "BUY" else 0.0
+
+    # Expected return: probability-weighted outcome using backtest avg win/loss
+    p_up = avg_score
+    expected_return_pct = round(p_up * avg_win - (1.0 - p_up) * avg_loss, 4)
+    # Downside risk: loss side of distribution at 1-sigma confidence
+    downside_risk_pct = round(avg_loss * (1.0 - p_up), 4)
+
     friendly = COMMODITIES.get(ticker, ticker)
     regime_index = int(float(regime_label_value))
     regime_text = REGIME_LABELS.get(regime_index, "Unknown")
@@ -124,6 +154,8 @@ def build_signal_payload(
         "regime_confidence": float(regime_confidence_value),
         "consensus": consensus_flag,
         "position_size_pct": kelly_fraction,
+        "expected_return_pct": expected_return_pct,
+        "downside_risk_pct": downside_risk_pct,
         "suggested_action": action_text,
         "sentiment": sentiment_snapshot,
         "backtest": stats_block,

@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import logging
+
+# Must be set before any torch/OpenMP import.
+# Apple Silicon has multiple libomp.dylib (Homebrew + PyTorch + sklearn) that
+# conflict during parallel barrier synchronisation — this prevents the SIGSEGV.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+import asyncio
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
@@ -17,11 +25,16 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.agent_analysis import router as agent_analysis_router
+from app.api.alerts import router as alerts_router
+from app.api.calendar import router as calendar_router
+from app.api.data_ingest import router as data_ingest_router
 from app.api.deps import get_session
 from app.api.jobs import router as jobs_router
+from app.api.paper_trading import router as paper_trading_router
 from app.api.stocks import router as stocks_router
 from app.constants import (
     COMMODITIES,
+    REDIS_PORTFOLIO_RISK_KEY,
     REDIS_SIGNAL_FILTERED_KEY,
     REDIS_SIGNAL_META_KEY,
     REDIS_SIGNAL_RAW_KEY,
@@ -46,8 +59,82 @@ from app.services.signals_service import fetch_latest_backtest, gather_training_
 LOGGER = logging.getLogger(__name__)
 
 
+async def _migrate_agent_memory_embedding() -> None:
+    """Add embedding_json column to agent_memory if it doesn't exist yet."""
+    from sqlalchemy import text as _text
+    try:
+        async with async_session_factory() as session:
+            await session.execute(_text(
+                "ALTER TABLE agent_memory ADD COLUMN IF NOT EXISTS embedding_json JSONB"
+            ))
+            await session.commit()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("agent_memory embedding migration skipped: %s", exc)
+
+
+async def _migrate_paper_trading() -> None:
+    """Create paper trading tables if they don't exist."""
+    from sqlalchemy import text as _text
+    statements = [
+        """CREATE TABLE IF NOT EXISTS paper_portfolio (
+            id SERIAL PRIMARY KEY,
+            initial_capital NUMERIC(18,2) NOT NULL DEFAULT 100000,
+            current_cash NUMERIC(18,2) NOT NULL,
+            spx_entry_price NUMERIC(18,4),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )""",
+        """CREATE TABLE IF NOT EXISTS paper_positions (
+            id SERIAL PRIMARY KEY,
+            ticker VARCHAR(16) NOT NULL,
+            name VARCHAR(128),
+            sector VARCHAR(64),
+            asset_class VARCHAR(16),
+            entry_price NUMERIC(18,4) NOT NULL,
+            entry_date TIMESTAMPTZ DEFAULT NOW(),
+            shares NUMERIC(18,6) NOT NULL,
+            position_size_pct NUMERIC(8,4) NOT NULL,
+            stop_loss_price NUMERIC(18,4) NOT NULL,
+            current_price NUMERIC(18,4),
+            recommendation VARCHAR(16) NOT NULL,
+            conviction VARCHAR(16),
+            thesis TEXT,
+            what_breaks_thesis TEXT,
+            source_run_id VARCHAR(64),
+            is_open BOOLEAN NOT NULL DEFAULT TRUE,
+            closed_at TIMESTAMPTZ,
+            close_price NUMERIC(18,4),
+            close_reason VARCHAR(64),
+            realized_pnl_pct NUMERIC(10,4)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_paper_pos_ticker ON paper_positions(ticker)",
+        "CREATE INDEX IF NOT EXISTS ix_paper_pos_is_open ON paper_positions(is_open)",
+        """CREATE TABLE IF NOT EXISTS paper_trades (
+            id SERIAL PRIMARY KEY,
+            ticker VARCHAR(16) NOT NULL,
+            direction VARCHAR(8) NOT NULL,
+            price NUMERIC(18,4) NOT NULL,
+            shares NUMERIC(18,6) NOT NULL,
+            value NUMERIC(18,2) NOT NULL,
+            pnl_pct NUMERIC(10,4),
+            reason VARCHAR(64) NOT NULL,
+            traded_at TIMESTAMPTZ DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_paper_trade_ticker ON paper_trades(ticker)",
+    ]
+    try:
+        async with async_session_factory() as session:
+            for stmt in statements:
+                await session.execute(_text(stmt))
+            await session.commit()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Paper trading migration skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _migrate_agent_memory_embedding()
+    await _migrate_paper_trading()
     scheduler = build_scheduler()
     try:
         yield
@@ -69,6 +156,10 @@ def build_app() -> FastAPI:
     application.include_router(stocks_router)
     application.include_router(jobs_router)
     application.include_router(agent_analysis_router)
+    application.include_router(alerts_router)
+    application.include_router(calendar_router)
+    application.include_router(data_ingest_router)
+    application.include_router(paper_trading_router)
     return application
 
 
@@ -78,6 +169,54 @@ app = build_app()
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _fetch_batch_prices_sync(tickers: list[str]) -> dict[str, float | None]:
+    """Batch price fetch via yfinance — runs in a thread pool."""
+    import pandas as pd
+    import yfinance as yf
+
+    result: dict[str, float | None] = {t: None for t in tickers}
+    try:
+        data = yf.download(tickers, period="1d", progress=False, auto_adjust=True)
+        if data.empty:
+            return result
+        close = data["Close"]
+        if isinstance(close, pd.Series):
+            clean = close.dropna()
+            if not clean.empty:
+                result[tickers[0]] = float(clean.iloc[-1])
+        else:
+            last = close.iloc[-1]
+            for t in tickers:
+                if t in last.index and pd.notna(last[t]):
+                    result[t] = float(last[t])
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/api/prices/live")
+async def api_live_prices(tickers: str) -> dict[str, float | None]:
+    """Return latest prices for a comma-separated list of tickers.
+
+    Results are Redis-cached for 90 seconds so multiple clients don't pile up
+    yfinance requests. Max 50 tickers per call.
+    """
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="No tickers provided")
+    if len(ticker_list) > 50:
+        raise HTTPException(status_code=400, detail="Max 50 tickers per request")
+
+    cache_key = f"live_prices:{','.join(sorted(ticker_list))}"
+    cached = await cache_load_json(cache_key)
+    if cached is not None:
+        return cached
+
+    prices = await asyncio.to_thread(_fetch_batch_prices_sync, ticker_list)
+    await cache_save_json(cache_key, prices, ttl_seconds=90)
+    return prices
 
 
 class RefreshResponse(BaseModel):
@@ -97,6 +236,8 @@ async def _cache_signal_bundle(result: dict[str, Any]) -> None:
         "source": "api_refresh",
     }
     await cache_save_json(REDIS_SIGNAL_META_KEY, meta)
+    if "risk" in result:
+        await cache_save_json(REDIS_PORTFOLIO_RISK_KEY, result["risk"])
 
 
 @app.post("/api/refresh", response_model=RefreshResponse, dependencies=[Depends(require_api_key)])
@@ -174,6 +315,22 @@ async def api_signals_raw() -> list[dict[str, Any]]:
     return data
 
 
+@app.get("/api/portfolio/risk")
+async def api_portfolio_risk() -> dict[str, Any]:
+    data = await cache_load_json(REDIS_PORTFOLIO_RISK_KEY)
+    if data is None:
+        raise HTTPException(status_code=503, detail="Portfolio risk cache empty; call POST /api/refresh first.")
+    return data
+
+
+@app.get("/api/events/price-triggers")
+async def api_price_triggers() -> dict[str, Any]:
+    """Return recent intraday price threshold events (>3% deviation from 20d SMA)."""
+    from app.services.price_monitor import get_recent_price_triggers
+    events = await get_recent_price_triggers()
+    return {"events": events, "count": len(events)}
+
+
 @app.get("/api/signals/{ticker:path}")
 async def api_signal_detail(ticker: str) -> dict[str, Any]:
     if ticker not in COMMODITIES:
@@ -234,6 +391,19 @@ async def api_backtest_board(session: AsyncSession = Depends(get_session)) -> li
         choice = max(h21, key=rk) if h21 else max(bucket, key=rk)
         out.append(_serialize_backtest_summary_row(choice))
     return out
+
+
+@app.get("/api/commodities/{ticker:path}/cot")
+async def api_commodity_cot(
+    ticker: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    if ticker not in COMMODITIES:
+        raise HTTPException(status_code=404, detail="Unknown commodity ticker.")
+    from app.data.cot_fetcher import get_latest_cot, get_cot_history
+    latest = await get_latest_cot(session, ticker)
+    history = await get_cot_history(session, ticker, weeks=52)
+    return {"latest": latest, "history": history}
 
 
 @app.get("/api/commodities/{ticker:path}/history")
