@@ -200,6 +200,69 @@ TOOL_SCHEMAS: list[dict] = [
             "required": ["ticker"],
         },
     },
+    {
+        "name": "get_cot_positioning",
+        "description": (
+            "Get CFTC Commitment of Traders positioning data for a commodity ticker. "
+            "Shows speculator (money manager) net long/short positioning and commercial hedger positioning. "
+            "Extreme speculator positioning (>80% long or <20% long) is a contrarian signal."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Commodity ticker (e.g. CL=F, GC=F, ZC=F)",
+                },
+                "weeks": {
+                    "type": "integer",
+                    "description": "Number of weeks of history (default 26)",
+                    "default": 26,
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "search_memory",
+        "description": (
+            "Search past agent analyses stored in memory. Use this to recall what previous runs concluded "
+            "about specific tickers, sectors, or macro themes. Helps identify persistent themes, "
+            "recurring risks, or whether a trade idea has been tried before."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query — ticker, sector, theme, or event (e.g. 'gold FOMC', 'NVDA AI spending')",
+                },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Optional: filter to a specific agent's past analyses",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_economic_calendar",
+        "description": (
+            "Get upcoming high-impact economic events (FOMC, CPI, NFP, PCE) in the next 30 days. "
+            "Use to check if a catalyst play has a macro landmine before entry."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Days ahead to look (default 30)",
+                    "default": 30,
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -634,6 +697,45 @@ async def _get_insider_activity(ticker: str) -> dict:
         return {"error": str(exc), "ticker": ticker}
 
 
+async def _get_cot_positioning(ticker: str, weeks: int, session: AsyncSession) -> dict:
+    from app.data.cot_fetcher import get_cot_history, get_latest_cot
+    latest = await get_latest_cot(session, ticker)
+    history = await get_cot_history(session, ticker, weeks=weeks)
+    if not latest:
+        return {"ticker": ticker, "note": "No COT data available. Run COT ingestion first."}
+    spec_pct = latest.get("spec_pct_long")
+    if spec_pct is not None:
+        if spec_pct >= 0.8:
+            positioning_signal = "EXTREME_LONG — contrarian bearish signal"
+        elif spec_pct >= 0.65:
+            positioning_signal = "CROWDED_LONG — caution"
+        elif spec_pct <= 0.2:
+            positioning_signal = "EXTREME_SHORT — contrarian bullish signal"
+        elif spec_pct <= 0.35:
+            positioning_signal = "CROWDED_SHORT — potential squeeze"
+        else:
+            positioning_signal = "NEUTRAL"
+    else:
+        positioning_signal = "unknown"
+    return {
+        "ticker": ticker,
+        "latest": latest,
+        "positioning_signal": positioning_signal,
+        "history_weeks": len(history),
+        "recent_4w": history[-4:] if len(history) >= 4 else history,
+    }
+
+
+async def _search_memory(query: str, agent_name: str | None, session: AsyncSession) -> list[dict]:
+    from app.agents.memory import search_memory
+    return await search_memory(session, query, agent_name=agent_name, limit=5)
+
+
+async def _get_economic_calendar(days: int, session: AsyncSession) -> list[dict]:
+    from app.data.calendar_fetcher import get_upcoming_economic_events
+    return await get_upcoming_economic_events(session, days=days)
+
+
 async def execute_tool(name: str, inputs: dict, ctx: ToolContext) -> Any:
     if name == "web_search":
         return await _web_search(inputs.get("query", ""), inputs.get("max_results", 5))
@@ -659,4 +761,10 @@ async def execute_tool(name: str, inputs: dict, ctx: ToolContext) -> Any:
         return await _get_options_context(inputs.get("ticker", ""))
     if name == "get_insider_activity":
         return await _get_insider_activity(inputs.get("ticker", ""))
+    if name == "get_cot_positioning":
+        return await _get_cot_positioning(inputs.get("ticker", ""), inputs.get("weeks", 26), ctx.session)
+    if name == "search_memory":
+        return await _search_memory(inputs.get("query", ""), inputs.get("agent_name"), ctx.session)
+    if name == "get_economic_calendar":
+        return await _get_economic_calendar(inputs.get("days", 30), ctx.session)
     return {"error": f"Unknown tool: {name}"}
