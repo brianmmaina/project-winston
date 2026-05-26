@@ -1,211 +1,189 @@
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-const AGENTS = [
-  {
-    id: "alpha_parser",
-    name: "Alpha Parser",
-    description: "Scans news, filings, and alt-data for fundamental alpha signals",
-    status: "running",
-    model: "gpt-4o",
-    lastRun: "2 min ago",
-    runCount: 1847,
-    successRate: 0.97,
-  },
-  {
-    id: "sentiment_analyzer",
-    name: "Sentiment Analyzer",
-    description: "NLP scoring of earnings calls, analyst notes, and social data",
-    status: "running",
-    model: "gpt-4o-mini",
-    lastRun: "8 min ago",
-    runCount: 3201,
-    successRate: 0.99,
-  },
-  {
-    id: "risk_sentinel",
-    name: "Risk Sentinel",
-    description: "Monitors position-level and portfolio-level risk flags in real time",
-    status: "idle",
-    model: "gpt-4o",
-    lastRun: "1h ago",
-    runCount: 422,
-    successRate: 0.94,
-  },
-  {
-    id: "catalyst_tracker",
-    name: "Catalyst Tracker",
-    description: "Identifies upcoming events, earnings dates, and macro catalysts",
-    status: "error",
-    model: "gpt-4o",
-    lastRun: "3h ago",
-    runCount: 311,
-    successRate: 0.82,
-  },
+import {
+  getRecentJobs,
+  triggerAgentAnalysis,
+  triggerDailyScan,
+  triggerRefreshAsync,
+  triggerRetrain,
+  triggerAlertScan,
+  triggerEconomicIngest,
+  triggerEarningsIngest,
+} from "../api/client";
+import type { JobStatus } from "../api/types.generated";
+
+const REAL_AGENTS = [
+  { id: "energy_commodities", name: "Energy Commodities", description: "WTI, Brent, NatGas, Heating Oil, Gasoline — supply/demand and macro flows" },
+  { id: "metals", name: "Metals", description: "Gold, Silver, Copper, Platinum, Palladium — demand and industrial cycle" },
+  { id: "agriculture", name: "Agriculture", description: "Corn, Wheat, Soybeans, Coffee, Cotton, Sugar, Cocoa — weather and supply chains" },
+  { id: "tech_comms_stocks", name: "Tech & Comms", description: "Top-N tech and communications stocks by ML rank" },
+  { id: "healthcare_stocks", name: "Healthcare", description: "Top-N healthcare stocks including biotech and pharma" },
+  { id: "financials_stocks", name: "Financials", description: "Top-N financials — banks, insurance, asset managers" },
+  { id: "cyclicals_stocks", name: "Cyclicals", description: "Consumer discretionary, industrials, materials" },
+  { id: "defensives_stocks", name: "Defensives", description: "Consumer staples, utilities, real estate" },
+  { id: "macro_rates", name: "Macro & Rates", description: "Fed policy, yield curve, DXY, cross-asset correlations" },
+  { id: "geopolitics", name: "Geopolitics", description: "Trade policy, sanctions, supply disruptions, country risk" },
+  { id: "sentiment_news", name: "Sentiment & News", description: "RSS feeds, FinBERT scoring, news momentum" },
 ];
 
-const GLOBAL_PARAMS = [
-  { key: "confidence_threshold", label: "Confidence Threshold", min: 0.5, max: 1.0, step: 0.01, value: 0.72, unit: "" },
-  { key: "max_positions", label: "Max Concurrent Positions", min: 5, max: 50, step: 1, value: 20, unit: "" },
-  { key: "lookback_days", label: "Lookback Window", min: 14, max: 252, step: 7, value: 90, unit: "d" },
-  { key: "rebalance_freq", label: "Rebalance Frequency", min: 1, max: 21, step: 1, value: 5, unit: "d" },
+const SCHEDULED_JOBS = [
+  { id: "commodity_refresh_weekday", label: "Commodity Refresh", schedule: "Mon–Fri 06:30 ET" },
+  { id: "daily_agent_scan", label: "Daily Agent Scan", schedule: "Mon–Fri 08:00 ET" },
+  { id: "daily_outcome_check", label: "Outcome Check", schedule: "Mon–Fri 08:30 ET" },
+  { id: "price_alert_scan", label: "Price Alert Scan", schedule: "Mon–Fri every 30 min (9–4 ET)" },
+  { id: "stock_refresh_weekday", label: "Stock Refresh", schedule: "Mon–Fri 07:15 ET" },
+  { id: "weekly_retrain", label: "Weekly Retrain", schedule: "Sun 02:00 ET" },
+  { id: "weekly_backtest", label: "Weekly Backtest", schedule: "Sun 04:00 ET" },
+  { id: "weekly_stock_retrain", label: "Stock Retrain + Backtest", schedule: "Sat 03:00 ET" },
+  { id: "weekly_cot", label: "COT Ingest", schedule: "Wed 09:00 ET" },
+  { id: "weekly_eia", label: "EIA Ingest", schedule: "Wed 10:30 ET" },
+  { id: "weekly_calendar", label: "Calendar Ingest", schedule: "Sun 06:00 ET" },
+  { id: "monthly_tuning", label: "Monthly Hyperparameter Tuning", schedule: "1st of month 01:00 ET" },
 ];
 
-const MOCK_LOG = [
-  "[14:32:01] Alpha Parser — scanned 142 SEC filings for NVDA, MSFT, AAPL",
-  "[14:32:04] Sentiment Analyzer — processed Q2 earnings call transcript (NVDA): bullish",
-  "[14:31:58] Alpha Parser — flagged insider buy pattern in SMCI ($2.1M)",
-  "[14:31:52] Risk Sentinel — portfolio VaR (95%): $48,200 within limits",
-  "[14:31:44] Alpha Parser — news scan complete: 3 BUY signals, 1 HOLD",
-  "[14:31:38] Catalyst Tracker — ERROR: rate limit exceeded on news API, retry in 180s",
-  "[14:30:59] Sentiment Analyzer — scored 28 analyst reports across Energy sector",
-  "[14:30:44] Alpha Parser — momentum signal detected: WTI crude breakout +2.1%",
-  "[14:30:31] Risk Sentinel — drawdown alert cleared for GOLD position",
-  "[14:30:18] Alpha Parser — started scheduled scan cycle #1847",
-];
-
-function StatusBadge({ status }: { status: string }) {
-  const cfg: Record<string, string> = {
-    running: "border-secondary/30 bg-secondary/10 text-secondary",
-    idle: "border-outline-variant text-on-surface-variant",
-    error: "border-error/30 bg-error/10 text-error",
-  };
-  return (
-    <span className={`font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border ${cfg[status] ?? cfg.idle}`}>
-      {status.toUpperCase()}
-    </span>
-  );
+function StateColor(state: string) {
+  if (state === "completed") return "text-secondary border-secondary/30 bg-secondary/10";
+  if (state === "failed") return "text-error border-error/30 bg-error/10";
+  if (state === "running") return "text-warning border-warning/40 bg-warning/10";
+  return "text-on-surface-variant border-outline-variant";
 }
 
-function AgentCard({ agent }: { agent: typeof AGENTS[0] }) {
+function JobRow({ job }: { job: JobStatus }) {
+  const ts = job.updated_at ? new Date(job.updated_at).toLocaleTimeString("en-US", { hour12: false }) : "—";
   return (
-    <div className="border border-outline-variant bg-surface-container p-4 space-y-3">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="font-mono text-[13px] font-semibold text-on-surface">{agent.name}</p>
-          <p className="font-mono text-[10px] text-on-surface-variant mt-0.5">{agent.description}</p>
-        </div>
-        <StatusBadge status={agent.status} />
+    <div className="flex items-center justify-between px-4 py-2 border-b border-outline-variant last:border-0">
+      <div className="flex items-center gap-3 min-w-0">
+        {(job.state === "running" || job.state === "pending") && (
+          <div className="w-2 h-2 rounded-full border border-current border-t-transparent animate-spin shrink-0 text-warning" />
+        )}
+        <span className="font-mono text-[11px] text-on-surface truncate">{job.name}</span>
+        {job.message && <span className="font-mono text-[10px] text-on-surface-variant truncate max-w-xs">{job.message}</span>}
       </div>
-      <div className="grid grid-cols-3 gap-3 pt-1 border-t border-outline-variant">
-        <div>
-          <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-on-surface-variant">Model</p>
-          <p className="font-mono text-[11px] text-on-surface mt-0.5">{agent.model}</p>
-        </div>
-        <div>
-          <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-on-surface-variant">Runs</p>
-          <p className="font-mono text-[11px] text-on-surface mt-0.5">{agent.runCount.toLocaleString()}</p>
-        </div>
-        <div>
-          <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-on-surface-variant">Success</p>
-          <p className={`font-mono text-[11px] mt-0.5 ${agent.successRate > 0.9 ? "text-secondary" : "text-error"}`}>
-            {(agent.successRate * 100).toFixed(0)}%
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center justify-between pt-1">
-        <span className="font-mono text-[10px] text-on-surface-variant">Last run: {agent.lastRun}</span>
-        <div className="flex gap-2">
-          <button type="button" className="font-mono text-[9px] font-bold tracking-[0.06em] uppercase px-2.5 py-1 border border-outline-variant text-on-surface-variant hover:border-outline hover:text-on-surface transition-colors">
-            Logs
-          </button>
-          <button type="button" className={`font-mono text-[9px] font-bold tracking-[0.06em] uppercase px-2.5 py-1 border transition-colors ${
-            agent.status === "running"
-              ? "border-error/40 text-error hover:bg-error/10"
-              : "border-secondary/40 text-secondary hover:bg-secondary/10"
-          }`}>
-            {agent.status === "running" ? "Stop" : "Start"}
-          </button>
-        </div>
+      <div className="flex items-center gap-3 shrink-0 ml-4">
+        <span className="font-mono text-[9px] text-on-surface-variant">{ts}</span>
+        <span className={`font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border ${StateColor(job.state)}`}>
+          {job.state.toUpperCase()}
+        </span>
       </div>
     </div>
   );
 }
 
-export default function AgentConfigPage(): ReactElement {
-  const [params, setParams] = useState(Object.fromEntries(GLOBAL_PARAMS.map((p) => [p.key, p.value])));
-  const [logLines] = useState(MOCK_LOG);
-  const logRef = useRef<HTMLDivElement>(null);
+type TriggerFn = () => Promise<unknown>;
 
-  useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
+function TriggerButton({ label, fn, className = "" }: { label: string; fn: TriggerFn; className?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fn() as Record<string, unknown>;
+      const detail = res?.job_id ? `job ${String(res.job_id).slice(0, 8)}…` : JSON.stringify(res);
+      setMsg(detail);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "error");
+    } finally {
+      setBusy(false);
     }
-  }, [logLines]);
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void run()}
+        className={`font-mono text-[9px] font-bold tracking-[0.06em] uppercase px-3 py-1.5 border transition-colors disabled:opacity-50 ${className || "border-outline-variant text-on-surface-variant hover:border-outline hover:text-on-surface"}`}
+      >
+        {busy ? "Running…" : label}
+      </button>
+      {msg && <span className="font-mono text-[9px] text-on-surface-variant">{msg}</span>}
+    </div>
+  );
+}
+
+export default function AgentConfigPage(): ReactElement {
+  const [jobs, setJobs] = useState<JobStatus[]>([]);
+
+  const fetchJobs = useCallback(async () => {
+    try { setJobs(await getRecentJobs(30)); } catch { /* non-critical */ }
+  }, []);
+
+  useEffect(() => { void fetchJobs(); }, [fetchJobs]);
+  useEffect(() => {
+    const id = setInterval(() => { void fetchJobs(); }, 10000);
+    return () => clearInterval(id);
+  }, [fetchJobs]);
 
   return (
     <div className="p-6 space-y-6">
       <div className="border-b border-outline-variant pb-4">
         <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Agent Configuration</p>
-        <p className="mt-1 font-mono text-xs text-on-surface-variant">Manage agent status, global parameters, and monitor the live logic stream</p>
+        <p className="mt-1 font-mono text-xs text-on-surface-variant">Pipeline agents, scheduled jobs, and manual triggers</p>
       </div>
 
-      <div>
-        <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant mb-3">Agent Status</p>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {AGENTS.map((agent) => <AgentCard key={agent.id} agent={agent} />)}
-        </div>
-      </div>
-
+      {/* Manual triggers */}
       <div className="border border-outline-variant bg-surface-container">
         <div className="px-4 py-3 border-b border-outline-variant">
-          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Global Parameters</p>
+          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Manual Triggers</p>
         </div>
-        <div className="p-4 space-y-5">
-          {GLOBAL_PARAMS.map((param) => (
-            <div key={param.key}>
-              <div className="flex justify-between mb-2">
-                <span className="font-mono text-[11px] text-on-surface-variant">{param.label}</span>
-                <span className="font-mono text-[12px] font-semibold text-on-surface">
-                  {params[param.key]}{param.unit}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={param.min}
-                max={param.max}
-                step={param.step}
-                value={params[param.key]}
-                onChange={(e) => setParams((p) => ({ ...p, [param.key]: Number(e.target.value) }))}
-                className="w-full h-1 appearance-none bg-surface-container-high rounded-none accent-secondary cursor-pointer"
-              />
-              <div className="flex justify-between mt-1">
-                <span className="font-mono text-[9px] text-on-surface-variant">{param.min}{param.unit}</span>
-                <span className="font-mono text-[9px] text-on-surface-variant">{param.max}{param.unit}</span>
-              </div>
+        <div className="p-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <TriggerButton label="Run Full Analysis" fn={triggerAgentAnalysis} className="border-secondary/40 text-secondary hover:bg-secondary/10" />
+          <TriggerButton label="Daily Scan" fn={triggerDailyScan} />
+          <TriggerButton label="Commodity Refresh" fn={triggerRefreshAsync} />
+          <TriggerButton label="Retrain Models" fn={triggerRetrain} />
+          <TriggerButton label="Price Alert Scan" fn={triggerAlertScan} />
+          <TriggerButton label="Ingest Economic Cal." fn={triggerEconomicIngest} />
+          <TriggerButton label="Ingest Earnings Cal." fn={triggerEarningsIngest} />
+        </div>
+      </div>
+
+      {/* Agent roster */}
+      <div>
+        <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant mb-3">Agent Roster</p>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {REAL_AGENTS.map((agent) => (
+            <div key={agent.id} className="border border-outline-variant bg-surface-container p-4">
+              <p className="font-mono text-[12px] font-semibold text-on-surface">{agent.name}</p>
+              <p className="font-mono text-[10px] text-on-surface-variant mt-0.5">{agent.description}</p>
+              <p className="font-mono text-[9px] text-on-surface-variant opacity-50 mt-2 uppercase tracking-widest">{agent.id}</p>
             </div>
           ))}
         </div>
-        <div className="px-4 py-3 border-t border-outline-variant flex justify-end">
-          <button type="button" className="px-5 py-2 bg-secondary text-on-secondary font-mono text-[11px] font-bold tracking-[0.08em] uppercase hover:bg-secondary-fixed-dim transition-colors">
-            Apply Parameters
-          </button>
+      </div>
+
+      {/* Scheduled jobs */}
+      <div className="border border-outline-variant bg-surface-container">
+        <div className="px-4 py-3 border-b border-outline-variant">
+          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Scheduled Jobs (APScheduler · America/New_York)</p>
+        </div>
+        <div className="divide-y divide-outline-variant">
+          {SCHEDULED_JOBS.map((j) => (
+            <div key={j.id} className="flex items-center justify-between px-4 py-2.5">
+              <span className="font-mono text-[11px] text-on-surface">{j.label}</span>
+              <span className="font-mono text-[10px] text-on-surface-variant">{j.schedule}</span>
+            </div>
+          ))}
         </div>
       </div>
 
+      {/* Recent job history */}
       <div className="border border-outline-variant bg-surface-container">
         <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant">
-          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Live Logic Log</p>
-          <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse" />
-            <span className="font-mono text-[9px] text-on-surface-variant uppercase tracking-widest">Live</span>
-          </div>
+          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Recent Job History</p>
+          <button type="button" onClick={() => void fetchJobs()} className="font-mono text-[9px] text-on-surface-variant hover:text-on-surface uppercase tracking-widest">
+            Refresh
+          </button>
         </div>
-        <div
-          ref={logRef}
-          className="h-52 overflow-y-auto p-4 space-y-1 bg-surface-container-lowest font-mono text-[11px]"
-        >
-          {logLines.map((line, i) => {
-            const isError = line.includes("ERROR");
-            const timestamp = line.match(/\[[\d:]+\]/)?.[0] ?? "";
-            const rest = line.replace(timestamp, "").trim();
-            return (
-              <div key={i} className="flex gap-2">
-                <span className="text-on-surface-variant shrink-0">{timestamp}</span>
-                <span className={isError ? "text-error" : "text-on-surface"}>{rest}</span>
-              </div>
-            );
-          })}
+        <div className="max-h-72 overflow-y-auto">
+          {jobs.length === 0 ? (
+            <p className="px-4 py-4 font-mono text-[11px] text-on-surface-variant text-center">No recent jobs</p>
+          ) : (
+            jobs.map((j) => <JobRow key={j.job_id} job={j} />)
+          )}
         </div>
       </div>
     </div>
