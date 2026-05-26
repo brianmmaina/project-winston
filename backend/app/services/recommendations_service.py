@@ -6,10 +6,10 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AgentRecommendation
+from app.db.models import AgentMemory, AgentRecommendation
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,60 @@ async def check_outcomes(session: AsyncSession) -> int:
         logger.info("Updated %d outcome checks", updated)
 
     return updated
+
+
+async def get_agent_calibration(session: AsyncSession) -> dict[str, float]:
+    """Compute per-agent pick accuracy from historical AgentMemory top_picks vs recommendation outcomes.
+
+    Returns a mapping of agent_name → hit_rate (fraction of top_picks that became profitable 2w recommendations).
+    Only agents with ≥3 evaluated picks are included; used as calibration context for the overseer.
+    """
+    memories = (
+        await session.execute(
+            select(AgentMemory)
+            .where(AgentMemory.top_picks.isnot(None))
+            .order_by(desc(AgentMemory.created_at))
+            .limit(500)
+        )
+    ).scalars().all()
+
+    recs = (await session.execute(select(AgentRecommendation))).scalars().all()
+
+    # Map run_id → set of tickers that were profitable at 2w
+    run_profitable: dict[str, set[str]] = {}
+    run_any: dict[str, set[str]] = {}
+    for r in recs:
+        if not r.run_id:
+            continue
+        run_any.setdefault(r.run_id, set()).add(r.ticker)
+        if r.check_2w_price is not None and r.entry_price and float(r.entry_price) > 0:
+            ret = (float(r.check_2w_price) / float(r.entry_price) - 1) * 100
+            if ret > 0:
+                run_profitable.setdefault(r.run_id, set()).add(r.ticker)
+
+    agent_hits: dict[str, list[int]] = {}
+    for mem in memories:
+        name = mem.agent_name
+        picks = mem.top_picks or []
+        run_id = mem.run_id
+        if not picks or run_id not in run_any:
+            continue
+        evaluated = [t for t in picks if t in run_any[run_id]]
+        if not evaluated:
+            continue
+        profitable = run_profitable.get(run_id, set())
+        hits = sum(1 for t in evaluated if t in profitable)
+        agent_hits.setdefault(name, []).append((hits, len(evaluated)))
+
+    calibration: dict[str, float] = {}
+    for name, results in agent_hits.items():
+        total_picks = sum(n for _, n in results)
+        if total_picks < 3:
+            continue
+        total_hits = sum(h for h, _ in results)
+        calibration[name] = round(total_hits / total_picks, 3)
+
+    return calibration
 
 
 async def get_performance_summary(session: AsyncSession) -> dict[str, Any]:
