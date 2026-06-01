@@ -10,9 +10,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import anthropic
 
-from app.core.config import get_settings
+from app.core.config import get_active_overseer_model, get_settings
 
 from .base import AgentResult, run_agent
 from .tools import ToolContext
@@ -73,7 +72,7 @@ async def run_bull_debate_agent(
     ticker: str,
     sector_thesis: str,
     bear_objection: str,
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
 ) -> AgentResult:
     today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
@@ -86,7 +85,7 @@ async def run_bull_debate_agent(
     )
     return await run_agent(
         client=client,
-        model=get_settings().agent_model,
+        model=get_active_overseer_model(),
         agent_name=f"bull_debate_{ticker}",
         system_prompt=_BULL_SYSTEM,
         initial_message=message,
@@ -99,7 +98,7 @@ async def run_bear_rebuttal_agent(
     ticker: str,
     bear_thesis: str,
     sector_objection: str,
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
 ) -> AgentResult:
     today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
@@ -112,7 +111,7 @@ async def run_bear_rebuttal_agent(
     )
     return await run_agent(
         client=client,
-        model=get_settings().agent_model,
+        model=get_active_overseer_model(),
         agent_name=f"bear_rebuttal_{ticker}",
         system_prompt=_BEAR_REBUTTAL_SYSTEM,
         initial_message=message,
@@ -125,7 +124,7 @@ async def run_debate_round(
     overseer_parsed: dict[str, Any],
     bear_parsed: dict[str, Any],
     sector_summaries: dict[str, str],
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
 ) -> dict[str, Any]:
     """Run debate agents on STRONG_BUY and AVOID tickers in parallel."""

@@ -6,9 +6,8 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import anthropic
 
-from app.core.config import get_settings
+from app.core.config import get_active_model, get_settings
 
 from .base import AgentResult, run_agent
 from .tools import ToolContext
@@ -228,12 +227,15 @@ ALL_SUB_AGENTS: list[SubAgentSpec] = [
 ]
 
 
-_CONCURRENCY = 3  # max simultaneous Anthropic API calls (Tier-1 rate limit safety)
+def _concurrency() -> int:
+    from app.core.config import get_settings
+    # Groq free tier: 30 RPM, 6000 TPM — keep lower concurrency to avoid token-limit bursts
+    return 2 if get_settings().llm_provider == "groq" else 3
 
 
 async def run_sub_agent(
     spec: SubAgentSpec,
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
     sem: asyncio.Semaphore,
 ) -> AgentResult:
@@ -244,7 +246,7 @@ async def run_sub_agent(
     async with sem:
         return await run_agent(
             client=client,
-            model=get_settings().agent_model,
+            model=get_active_model(),
             agent_name=spec.name,
             system_prompt=spec.system_prompt,
             initial_message=initial_message,
@@ -254,10 +256,10 @@ async def run_sub_agent(
 
 
 async def run_all_sub_agents(
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
 ) -> list[AgentResult]:
-    sem = asyncio.Semaphore(_CONCURRENCY)
+    sem = asyncio.Semaphore(_concurrency())
     tasks = [run_sub_agent(spec, client, tool_context, sem) for spec in ALL_SUB_AGENTS]
     raw = await asyncio.gather(*tasks, return_exceptions=True)
     results: list[AgentResult] = []

@@ -5,13 +5,12 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import anthropic
-
 from app.constants import REDIS_AGENT_ANALYSIS_KEY, REDIS_DAILY_SCAN_KEY
 from app.core.redis_client import cache_load_json, cache_save_json
 from app.db.session import async_session_factory
 
 from .base import run_agent
+from .llm_client import make_agent_client
 from .tools import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -57,10 +56,10 @@ async def run_daily_scan() -> dict[str, Any]:
     if not active_picks:
         return {"skipped": True, "reason": "No active BUY picks to monitor"}
 
-    from app.core.config import get_settings
-    settings = get_settings()
-    if not settings.anthropic_api_key:
-        return {"skipped": True, "reason": "No ANTHROPIC_API_KEY configured"}
+    try:
+        client, sub_model, _ = make_agent_client()
+    except ValueError as exc:
+        return {"skipped": True, "reason": str(exc)}
 
     picks_summary = "\n".join(
         f"- {p['ticker']} ({p.get('horizon','?')}-term, {p.get('final_recommendation')}): "
@@ -77,14 +76,11 @@ async def run_daily_scan() -> dict[str, Any]:
         "3. Output your JSON health check"
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    haiku_model = "claude-haiku-4-5-20251001"
-
     async with async_session_factory() as session:
         tool_context = ToolContext(session=session, top_n=10)
         result = await run_agent(
             client=client,
-            model=haiku_model,
+            model=sub_model,
             agent_name="daily_scan",
             system_prompt=_SCAN_SYSTEM,
             initial_message=initial_message,

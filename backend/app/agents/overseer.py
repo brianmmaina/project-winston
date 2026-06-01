@@ -5,9 +5,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import anthropic
 
-from app.core.config import get_settings
+from app.core.config import get_active_overseer_model, get_settings
 
 from .base import AgentResult, run_agent
 from .tools import ToolContext
@@ -96,7 +95,7 @@ async def run_overseer(
     sub_results: list[AgentResult],
     catalyst_result: AgentResult | None,
     bear_result: AgentResult | None,
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
     debate_context: dict[str, Any] | None = None,
     risk_context: dict[str, Any] | None = None,
@@ -173,12 +172,60 @@ async def run_overseer(
            "6. Output the final portfolio JSON")
     )
 
-    return await run_agent(
+    result = await run_agent(
         client=client,
-        model=get_settings().agent_overseer_model,
+        model=get_active_overseer_model(),
         agent_name="overseer",
         system_prompt=_OVERSEER_SYSTEM,
         initial_message=initial_message,
         tool_context=tool_context,
         max_turns=15,
     )
+
+    # If the model produced analysis but no JSON, do a direct one-shot extraction call (no tools).
+    if result.error is None and not result.parsed and result.text:
+        logger.info("Overseer produced no JSON — running direct extraction call")
+        try:
+            from .base import _extract_json, _is_anthropic
+
+            extraction_prompt = (
+                "You are a JSON formatter. Convert the portfolio analysis below into the required JSON schema.\n"
+                "Output ONLY valid JSON starting with { — no markdown fences, no preamble, no explanation.\n\n"
+                "ANALYSIS:\n"
+                f"{result.text}\n\n"
+                "REQUIRED SCHEMA:\n"
+                '{"market_overview":"...","portfolio_thesis":"...","verified_trades":[{"ticker":"...",'
+                '"asset_class":"stock","sector":"...","ml_signal":"BUY|HOLD",'
+                '"final_recommendation":"STRONG_BUY|BUY|HOLD|AVOID","conviction":"high|medium|low",'
+                '"horizon":"short|medium","position_size_pct":5,"agent_consensus":"agree",'
+                '"catalyst":null,"catalyst_date":null,"supporting_themes":[],"risk_factors":[],'
+                '"what_breaks_thesis":"...","suggested_action":"..."}],'
+                '"watchlist":[],"risk_notes":"..."}'
+            )
+
+            model = get_active_overseer_model()
+            if _is_anthropic(client):
+                resp = await client.messages.create(
+                    model=model,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": extraction_prompt}],
+                )
+                raw = "".join(b.text for b in resp.content if hasattr(b, "text"))
+            else:
+                resp = await client.chat.completions.create(
+                    model=model,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": extraction_prompt}],
+                )
+                raw = resp.choices[0].message.content or ""
+
+            parsed = _extract_json(raw)
+            if parsed:
+                logger.info("JSON extraction succeeded — %d trades", len(parsed.get("verified_trades", [])))
+                return AgentResult(name="overseer", text=raw, parsed=parsed)
+            else:
+                logger.warning("JSON extraction follow-up also returned no parsed JSON; raw=%r", raw[:300])
+        except Exception as exc:
+            logger.error("JSON extraction follow-up failed: %s", exc)
+
+    return result

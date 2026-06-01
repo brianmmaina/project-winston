@@ -7,7 +7,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-import anthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import REDIS_AGENT_ANALYSIS_KEY, REDIS_AGENT_META_KEY, REDIS_PORTFOLIO_RISK_KEY
@@ -20,6 +19,7 @@ from app.services.recommendations_service import get_agent_calibration, save_rec
 from .bear_case_agent import run_bear_case_agent
 from .catalyst_agent import run_catalyst_agent
 from .debate_agents import run_debate_round
+from .llm_client import make_agent_client, make_overseer_client
 from .memory import save_agent_memories
 from .overseer import run_overseer
 from .sub_agents import ALL_SUB_AGENTS, run_all_sub_agents
@@ -47,12 +47,11 @@ def _collect_summaries(sub_results: list) -> dict[str, str]:
 
 async def run_agent_pipeline(session: AsyncSession) -> dict[str, Any]:
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY is not configured.")
+    client, sub_model, overseer_model = make_agent_client()
+    o_client, o_model = make_overseer_client()
 
     run_id = str(uuid.uuid4())
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    tool_context = ToolContext(session=session, top_n=settings.agent_top_n_per_sector)
+    tool_context = ToolContext(session_factory=async_session_factory, top_n=settings.agent_top_n_per_sector)
 
     # Phase 1 — sector agents in parallel (semaphore-limited)
     logger.info("Pipeline %s: running %d sector agents", run_id, len(ALL_SUB_AGENTS))
@@ -89,7 +88,7 @@ async def run_agent_pipeline(session: AsyncSession) -> dict[str, Any]:
     # Phase 3 — overseer (initial synthesis)
     logger.info("Phase 3: overseer initial synthesis (calibration for %d agents)", len(calibration))
     overseer_result = await run_overseer(
-        sub_results, catalyst_result, bear_result, client, tool_context,
+        sub_results, catalyst_result, bear_result, o_client, tool_context,
         risk_context=risk_context,
         agent_calibration=calibration,
     )
@@ -115,14 +114,14 @@ async def run_agent_pipeline(session: AsyncSession) -> dict[str, Any]:
                     overseer_result.parsed,
                     bear_result.parsed if bear_result and not bear_result.error else {},
                     summaries,
-                    client,
+                    o_client,
                     tool_context,
                 )
                 # Re-run overseer with debate context if debate produced results
                 if debate_results["bull_debates"] or debate_results["bear_rebuttals"]:
                     logger.info("Phase 4b: overseer final synthesis with debate context")
                     overseer_result = await run_overseer(
-                        sub_results, catalyst_result, bear_result, client, tool_context,
+                        sub_results, catalyst_result, bear_result, o_client, tool_context,
                         debate_context=debate_results,
                         risk_context=risk_context,
                         agent_calibration=calibration,

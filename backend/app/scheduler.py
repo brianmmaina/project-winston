@@ -423,7 +423,7 @@ def build_scheduler() -> AsyncIOScheduler | None:
         misfire_grace_time=7200,
     )
 
-    if settings.agent_analysis_scheduled and settings.anthropic_api_key:
+    if settings.agent_analysis_scheduled and (settings.cerebras_api_key or settings.anthropic_api_key or settings.gemini_api_key or settings.groq_api_key):
         sched.add_job(
             daily_agent_analysis,
             CronTrigger(day_of_week="mon-fri", hour=9, minute=0),
