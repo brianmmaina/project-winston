@@ -1,5 +1,5 @@
-import type { ReactElement } from "react";
 import { useState } from "react";
+import type { ReactElement } from "react";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -33,28 +33,12 @@ function Toggle({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean
   );
 }
 
-function MaskedKey({ value }: { value: string }) {
-  const [show, setShow] = useState(false);
-  const display = show ? value : value.slice(0, 8) + "…" + value.slice(-4);
-  return (
-    <div className="flex items-center gap-2">
-      <span className="font-mono text-[11px] text-on-surface-variant">{display}</span>
-      <button
-        type="button"
-        onClick={() => setShow((v) => !v)}
-        className="font-mono text-[9px] text-on-surface-variant hover:text-on-surface uppercase tracking-widest"
-      >
-        {show ? "Hide" : "Show"}
-      </button>
-    </div>
-  );
-}
-
 const API_KEYS = [
-  { name: "Anthropic Claude", key: "sk-ant-api03-UZ_YQ0vgJ2jZ…", status: "Active", env: "ANTHROPIC_API_KEY" },
-  { name: "FRED (Federal Reserve)", key: "2aa765e1ebaa2d19f6f7b4f42cab5789", status: "Active", env: "FRED_API_KEY" },
-  { name: "EIA Open Data", key: "RecpLatgJC1oRHzTv6PMgXNDl54uyVNHJov8Cstz", status: "Active", env: "EIA_API_KEY" },
-  { name: "Tavily Search", key: "tvly-dev-2EV9yk-0LCutdCNBxLmygREe0kRngeEo…", status: "Active", env: "TAVILY_API_KEY" },
+  { name: "Anthropic Claude", env: "ANTHROPIC_API_KEY" },
+  { name: "Cerebras", env: "CEREBRAS_API_KEY" },
+  { name: "FRED (Federal Reserve)", env: "FRED_API_KEY" },
+  { name: "EIA Open Data", env: "EIA_API_KEY" },
+  { name: "Tavily Search", env: "TAVILY_API_KEY" },
 ];
 
 const DATA_SOURCES = [
@@ -128,12 +112,12 @@ export default function SettingsPage(): ReactElement {
       </Section>
 
       <Section title="API Keys">
-        <p className="font-mono text-[10px] text-on-surface-variant mb-3 opacity-60">Keys are loaded from .env at startup. Rotate by updating .env and restarting the backend.</p>
+        <p className="font-mono text-[10px] text-on-surface-variant mb-3 opacity-60">Keys are configured as environment variables on the server. Never stored or displayed here.</p>
         <div className="overflow-x-auto -mx-4 -mb-4">
           <table className="w-full text-left">
             <thead className="border-b border-outline-variant bg-surface-container-high">
               <tr>
-                {["Service", "Env Var", "Key Preview", "Status"].map((h) => (
+                {["Service", "Env Var"].map((h) => (
                   <th key={h} className="px-4 py-2 font-mono text-[9px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">
                     {h}
                   </th>
@@ -145,12 +129,6 @@ export default function SettingsPage(): ReactElement {
                 <tr key={k.name}>
                   <td className="px-4 py-2.5 font-mono text-[11px] text-on-surface">{k.name}</td>
                   <td className="px-4 py-2.5 font-mono text-[10px] text-on-surface-variant">{k.env}</td>
-                  <td className="px-4 py-2.5"><MaskedKey value={k.key} /></td>
-                  <td className="px-4 py-2.5">
-                    <span className="font-mono text-[9px] font-bold tracking-[0.08em] px-2 py-0.5 border border-secondary/30 bg-secondary/10 text-secondary">
-                      {k.status}
-                    </span>
-                  </td>
                 </tr>
               ))}
             </tbody>
