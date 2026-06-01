@@ -5,9 +5,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import anthropic
 
-from app.core.config import get_settings
+from app.core.config import get_active_model, get_settings
 
 from .base import AgentResult, run_agent
 from .tools import ToolContext
@@ -51,7 +50,7 @@ Your final response must be a single JSON object:
 async def run_bear_case_agent(
     sector_top_picks: list[str],
     sector_summaries: dict[str, Any],
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
 ) -> AgentResult:
     today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
@@ -76,7 +75,7 @@ async def run_bear_case_agent(
 
     return await run_agent(
         client=client,
-        model=get_settings().agent_model,
+        model=get_active_model(),
         agent_name="bear_case",
         system_prompt=_BEAR_SYSTEM,
         initial_message=initial_message,
