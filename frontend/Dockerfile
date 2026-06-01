@@ -29,7 +29,7 @@ FROM nginx:1.27-alpine
 # Drop default site so our config is the only one.
 RUN rm -f /etc/nginx/conf.d/default.conf
 
-COPY nginx.conf /etc/nginx/conf.d/app.conf
+COPY nginx.conf /etc/nginx/conf.d/app.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 5173
@@ -37,4 +37,4 @@ EXPOSE 5173
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:5173/nginx-health || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/bin/sh", "-c", "envsubst '${BACKEND_URL}' < /etc/nginx/conf.d/app.conf.template > /etc/nginx/conf.d/app.conf && nginx -g 'daemon off;'"]
