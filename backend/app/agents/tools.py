@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
+from typing import Callable
+
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -268,7 +270,7 @@ TOOL_SCHEMAS: list[dict] = [
 
 @dataclass
 class ToolContext:
-    session: AsyncSession
+    session_factory: Callable
     top_n: int = 10
 
 
@@ -285,8 +287,9 @@ async def _web_search(query: str, max_results: int = 5) -> list[dict]:
         from tavily import TavilyClient  # type: ignore[import]
 
         client = TavilyClient(api_key=settings.tavily_api_key)
-        response = await asyncio.to_thread(
-            client.search, query, max_results=max_results, search_depth="advanced"
+        response = await asyncio.wait_for(
+            asyncio.to_thread(client.search, query, max_results=max_results, search_depth="basic"),
+            timeout=15.0,
         )
         results = response.get("results", [])
         return [
@@ -298,6 +301,9 @@ async def _web_search(query: str, max_results: int = 5) -> list[dict]:
             }
             for r in results
         ]
+    except asyncio.TimeoutError:
+        logger.warning("Tavily search timed out for %r", query)
+        return [{"title": "Search timeout", "content": "Web search timed out. Analysis based on database signals only."}]
     except Exception as exc:
         logger.warning("Tavily search failed for %r: %s", query, exc)
         return [{"title": "Search error", "content": str(exc)}]
@@ -741,16 +747,6 @@ async def execute_tool(name: str, inputs: dict, ctx: ToolContext) -> Any:
         return await _web_search(inputs.get("query", ""), inputs.get("max_results", 5))
     if name == "get_commodity_signals":
         return await _get_commodity_signals()
-    if name == "get_stock_rankings":
-        return await _get_stock_rankings(
-            inputs.get("sector_group", ""), inputs.get("top_n", ctx.top_n), ctx.session
-        )
-    if name == "get_macro_indicators":
-        return await _get_macro_indicators(ctx.session)
-    if name == "get_price_history":
-        return await _get_price_history(inputs.get("ticker", ""), inputs.get("days", 30), ctx.session)
-    if name == "get_sentiment_scores":
-        return await _get_sentiment_scores(inputs.get("tickers", []), ctx.session)
     if name == "get_fundamentals":
         return await _get_fundamentals(inputs.get("ticker", ""))
     if name == "get_earnings_calendar":
@@ -761,10 +757,24 @@ async def execute_tool(name: str, inputs: dict, ctx: ToolContext) -> Any:
         return await _get_options_context(inputs.get("ticker", ""))
     if name == "get_insider_activity":
         return await _get_insider_activity(inputs.get("ticker", ""))
-    if name == "get_cot_positioning":
-        return await _get_cot_positioning(inputs.get("ticker", ""), inputs.get("weeks", 26), ctx.session)
-    if name == "search_memory":
-        return await _search_memory(inputs.get("query", ""), inputs.get("agent_name"), ctx.session)
-    if name == "get_economic_calendar":
-        return await _get_economic_calendar(inputs.get("days", 30), ctx.session)
+
+    # DB tools — each gets its own session to allow safe concurrent execution
+    async with ctx.session_factory() as session:
+        if name == "get_stock_rankings":
+            return await _get_stock_rankings(
+                inputs.get("sector_group", ""), inputs.get("top_n", ctx.top_n), session
+            )
+        if name == "get_macro_indicators":
+            return await _get_macro_indicators(session)
+        if name == "get_price_history":
+            return await _get_price_history(inputs.get("ticker", ""), inputs.get("days", 30), session)
+        if name == "get_sentiment_scores":
+            return await _get_sentiment_scores(inputs.get("tickers", []), session)
+        if name == "get_cot_positioning":
+            return await _get_cot_positioning(inputs.get("ticker", ""), inputs.get("weeks", 26), session)
+        if name == "search_memory":
+            return await _search_memory(inputs.get("query", ""), inputs.get("agent_name"), session)
+        if name == "get_economic_calendar":
+            return await _get_economic_calendar(inputs.get("days", 30), session)
+
     return {"error": f"Unknown tool: {name}"}
