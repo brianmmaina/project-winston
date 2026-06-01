@@ -4,9 +4,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-import anthropic
 
-from app.core.config import get_settings
+from app.core.config import get_active_model, get_settings
 
 from .base import AgentResult, run_agent
 from .tools import ToolContext
@@ -52,7 +51,7 @@ Your final response must be a single JSON object:
 
 async def run_catalyst_agent(
     sector_top_picks: list[str],
-    client: anthropic.AsyncAnthropic,
+    client: object,
     tool_context: ToolContext,
 ) -> AgentResult:
     today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
@@ -72,7 +71,7 @@ async def run_catalyst_agent(
 
     return await run_agent(
         client=client,
-        model=get_settings().agent_model,
+        model=get_active_model(),
         agent_name="catalyst",
         system_prompt=_CATALYST_SYSTEM,
         initial_message=initial_message,
