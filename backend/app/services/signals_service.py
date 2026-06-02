@@ -113,23 +113,29 @@ def history_to_wide(history_map: dict[str, list[tuple[Any, float]]]) -> pd.DataF
 
 
 async def _load_cot_df(session: AsyncSession, ticker: str) -> pd.DataFrame:
-    rows = await get_cot_history(session, ticker, weeks=260)
-    if not rows:
+    try:
+        async with session.begin_nested():
+            rows = await get_cot_history(session, ticker, weeks=260)
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df["report_date"])
+        return df.drop(columns=["report_date"])
+    except Exception as exc:
+        logger.debug("COT load failed for %s: %s", ticker, exc)
         return pd.DataFrame()
-    df = pd.DataFrame(rows)
-    df.index = pd.to_datetime(df["report_date"])
-    return df.drop(columns=["report_date"])
 
 
 async def _load_usda_df(session: AsyncSession, ticker: str) -> pd.DataFrame:
     """Load USDA PSD rows for this ticker from the usda_psd table."""
     from sqlalchemy import text as _text
     try:
-        result = await session.execute(
-            _text("SELECT attribute_id, market_year, value FROM usda_psd WHERE ticker = :ticker ORDER BY market_year"),
-            {"ticker": ticker},
-        )
-        rows = result.fetchall()
+        async with session.begin_nested():
+            result = await session.execute(
+                _text("SELECT attribute_id, market_year, value FROM usda_psd WHERE ticker = :ticker ORDER BY market_year"),
+                {"ticker": ticker},
+            )
+            rows = result.fetchall()
         if not rows:
             return pd.DataFrame()
         return pd.DataFrame(rows, columns=["attribute_id", "market_year", "value"])
@@ -142,12 +148,13 @@ async def _load_eia_df(session: AsyncSession, ticker: str) -> pd.DataFrame:
     """Load EIA inventory rows for this ticker (all series_ids) from the DB."""
     from sqlalchemy import desc
     try:
-        result = await session.execute(
-            select(EiaInventory)
-            .where(EiaInventory.ticker == ticker)
-            .order_by(EiaInventory.report_date)
-        )
-        rows = result.scalars().all()
+        async with session.begin_nested():
+            result = await session.execute(
+                select(EiaInventory)
+                .where(EiaInventory.ticker == ticker)
+                .order_by(EiaInventory.report_date)
+            )
+            rows = result.scalars().all()
         if not rows:
             return pd.DataFrame()
         return pd.DataFrame([
