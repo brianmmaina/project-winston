@@ -10,7 +10,7 @@ from app.core.redis_client import cache_load_json, cache_save_json
 from app.db.session import async_session_factory
 
 from .base import run_agent
-from .llm_client import make_agent_client
+from .llm_client import make_overseer_client
 from .tools import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ async def run_daily_scan() -> dict[str, Any]:
         return {"skipped": True, "reason": "No active BUY picks to monitor"}
 
     try:
-        client, sub_model, _ = make_agent_client()
+        client, sub_model = make_overseer_client()
     except ValueError as exc:
         return {"skipped": True, "reason": str(exc)}
 
