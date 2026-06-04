@@ -10,7 +10,7 @@ from app.core.redis_client import cache_load_json, cache_save_json
 from app.db.session import async_session_factory
 
 from .base import run_agent
-from .llm_client import make_overseer_client
+from app.core.config import get_settings
 from .tools import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -56,10 +56,12 @@ async def run_daily_scan() -> dict[str, Any]:
     if not active_picks:
         return {"skipped": True, "reason": "No active BUY picks to monitor"}
 
-    try:
-        client, sub_model = make_overseer_client()
-    except ValueError as exc:
-        return {"skipped": True, "reason": str(exc)}
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        return {"skipped": True, "reason": "ANTHROPIC_API_KEY not set — daily scan requires Anthropic"}
+    import anthropic
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    sub_model = settings.agent_overseer_model
 
     picks_summary = "\n".join(
         f"- {p['ticker']} ({p.get('horizon','?')}-term, {p.get('final_recommendation')}): "
