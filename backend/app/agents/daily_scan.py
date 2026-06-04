@@ -43,10 +43,17 @@ Respond with a single JSON object:
 """
 
 
+async def _save_skip(reason: str) -> dict[str, Any]:
+    result = {"skipped": True, "reason": reason, "scanned_at": datetime.now(tz=UTC).isoformat()}
+    await cache_save_json(REDIS_DAILY_SCAN_KEY, result)
+    logger.warning("Daily scan skipped: %s", reason)
+    return result
+
+
 async def run_daily_scan() -> dict[str, Any]:
     latest = await cache_load_json(REDIS_AGENT_ANALYSIS_KEY)
     if not latest:
-        return {"skipped": True, "reason": "No analysis available to scan"}
+        return await _save_skip("No analysis available to scan")
 
     overseer = latest.get("overseer", {})
     parsed = overseer.get("parsed", {})
@@ -54,11 +61,11 @@ async def run_daily_scan() -> dict[str, Any]:
     active_picks = [t for t in trades if t.get("final_recommendation") in ("STRONG_BUY", "BUY")]
 
     if not active_picks:
-        return {"skipped": True, "reason": "No active BUY picks to monitor"}
+        return await _save_skip("No active BUY picks to monitor")
 
     settings = get_settings()
     if not settings.anthropic_api_key:
-        return {"skipped": True, "reason": "ANTHROPIC_API_KEY not set — daily scan requires Anthropic"}
+        return await _save_skip("ANTHROPIC_API_KEY not set on server")
     import anthropic
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     sub_model = settings.agent_overseer_model
@@ -90,6 +97,8 @@ async def run_daily_scan() -> dict[str, Any]:
             max_turns=6,
         )
 
+    if result.error:
+        return await _save_skip(f"Agent error: {result.error}")
     output = result.parsed if result.parsed else {}
     output["scanned_at"] = datetime.now(tz=UTC).isoformat()
     output["active_picks_count"] = len(active_picks)
