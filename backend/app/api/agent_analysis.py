@@ -97,8 +97,19 @@ async def trigger_daily_scan(background_tasks: BackgroundTasks) -> dict[str, Any
     async def _run() -> None:
         try:
             await run_daily_scan()
-        except Exception as exc:
-            logger.exception("Daily scan failed: %s", exc)
+        except BaseException as exc:
+            from app.constants import REDIS_DAILY_SCAN_KEY
+            from app.core.redis_client import cache_save_json as _save
+            from datetime import UTC, datetime
+            logger.exception("Daily scan crashed: %s", exc)
+            try:
+                await _save(REDIS_DAILY_SCAN_KEY, {
+                    "skipped": True,
+                    "reason": f"crashed: {type(exc).__name__}: {exc}",
+                    "scanned_at": datetime.now(tz=UTC).isoformat(),
+                })
+            except Exception:
+                pass
     background_tasks.add_task(_run)
     return {"status": "daily scan started"}
 
