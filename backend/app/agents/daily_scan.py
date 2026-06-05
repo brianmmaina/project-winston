@@ -7,10 +7,10 @@ from typing import Any
 
 from app.constants import REDIS_AGENT_ANALYSIS_KEY, REDIS_DAILY_SCAN_KEY
 from app.core.redis_client import cache_load_json, cache_save_json
+from app.core.config import get_settings
 from app.db.session import async_session_factory
 
 from .base import run_agent
-from app.core.config import get_settings
 from .tools import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -85,17 +85,16 @@ async def run_daily_scan() -> dict[str, Any]:
         "3. Output your JSON health check"
     )
 
-    async with async_session_factory() as session:
-        tool_context = ToolContext(session=session, top_n=10)
-        result = await run_agent(
-            client=client,
-            model=sub_model,
-            agent_name="daily_scan",
-            system_prompt=_SCAN_SYSTEM,
-            initial_message=initial_message,
-            tool_context=tool_context,
-            max_turns=6,
-        )
+    tool_context = ToolContext(session_factory=async_session_factory, top_n=10)
+    result = await run_agent(
+        client=client,
+        model=sub_model,
+        agent_name="daily_scan",
+        system_prompt=_SCAN_SYSTEM,
+        initial_message=initial_message,
+        tool_context=tool_context,
+        max_turns=6,
+    )
 
     if result.error:
         return await _save_skip(f"Agent error: {result.error}")
