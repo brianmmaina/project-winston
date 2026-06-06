@@ -118,6 +118,6 @@ async def trigger_daily_scan(background_tasks: BackgroundTasks) -> dict[str, Any
 async def get_daily_scan() -> dict[str, Any]:
     from app.constants import REDIS_DAILY_SCAN_KEY
     data = await cache_load_json(REDIS_DAILY_SCAN_KEY)
-    if data is None:
+    if data is None or data.get("skipped"):
         raise HTTPException(status_code=404, detail="No daily scan available yet.")
     return data
