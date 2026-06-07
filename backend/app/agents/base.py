@@ -48,10 +48,11 @@ async def run_agent(
     initial_message: str,
     tool_context: ToolContext,
     max_turns: int = 12,
+    max_tokens: int = 4096,
 ) -> AgentResult:
     if _is_anthropic(client):
-        return await _run_anthropic(client, model, agent_name, system_prompt, initial_message, tool_context, max_turns)
-    return await _run_openai(client, model, agent_name, system_prompt, initial_message, tool_context, max_turns)
+        return await _run_anthropic(client, model, agent_name, system_prompt, initial_message, tool_context, max_turns, max_tokens)
+    return await _run_openai(client, model, agent_name, system_prompt, initial_message, tool_context, max_turns, max_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -66,10 +67,12 @@ async def _run_anthropic(
     initial_message: str,
     tool_context: ToolContext,
     max_turns: int,
+    max_tokens: int = 4096,
 ) -> AgentResult:
     import anthropic as _anthropic
 
     messages: list[dict] = [{"role": "user", "content": initial_message}]
+    accumulated_text: list[str] = []
 
     for turn in range(max_turns):
         response = None
@@ -80,7 +83,7 @@ async def _run_anthropic(
             try:
                 response = await client.messages.create(
                     model=model,
-                    max_tokens=2048,
+                    max_tokens=max_tokens,
                     system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                     tools=TOOL_SCHEMAS,
                     messages=messages,
@@ -109,9 +112,18 @@ async def _run_anthropic(
                 cleaned.append(blk)
         messages.append({"role": "assistant", "content": cleaned})
 
+        turn_text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        if turn_text:
+            accumulated_text.append(turn_text)
+
         if response.stop_reason == "end_turn":
-            text = "".join(b.text for b in response.content if hasattr(b, "text"))
+            text = "".join(accumulated_text)
             return AgentResult(name=agent_name, text=text, parsed=_extract_json(text))
+
+        if response.stop_reason == "max_tokens":
+            # Output was truncated — ask the model to continue so we get the full response.
+            messages.append({"role": "user", "content": "Continue exactly from where you left off."})
+            continue
 
         if response.stop_reason == "tool_use":
             tool_results = []
@@ -126,6 +138,10 @@ async def _run_anthropic(
                     tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": content})
             messages.append({"role": "user", "content": tool_results})
 
+    text = "".join(accumulated_text)
+    if text:
+        logger.warning("Agent %s hit max_turns=%d, returning accumulated text", agent_name, max_turns)
+        return AgentResult(name=agent_name, text=text, parsed=_extract_json(text))
     logger.warning("Agent %s hit max_turns=%d", agent_name, max_turns)
     return AgentResult(name=agent_name, text="Max turns reached", error="max_turns_exceeded")
 
@@ -142,11 +158,13 @@ async def _run_openai(
     initial_message: str,
     tool_context: ToolContext,
     max_turns: int,
+    max_tokens: int = 4096,
 ) -> AgentResult:
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": initial_message},
     ]
+    accumulated_text: list[str] = []
 
     for turn in range(max_turns):
         response = None
@@ -157,7 +175,7 @@ async def _run_openai(
             try:
                 response = await client.chat.completions.create(
                     model=model,
-                    max_tokens=2048,
+                    max_tokens=max_tokens,
                     tools=_OPENAI_TOOL_SCHEMAS,
                     messages=messages,
                 )
@@ -181,7 +199,8 @@ async def _run_openai(
         msg = choice.message
 
         if choice.finish_reason in ("stop", "end_turn", None) and not msg.tool_calls:
-            text = msg.content or ""
+            accumulated_text.append(msg.content or "")
+            text = "".join(accumulated_text)
             return AgentResult(name=agent_name, text=text, parsed=_extract_json(text))
 
         if choice.finish_reason == "tool_calls" or msg.tool_calls:
