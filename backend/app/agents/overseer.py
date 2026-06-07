@@ -180,6 +180,7 @@ async def run_overseer(
         initial_message=initial_message,
         tool_context=tool_context,
         max_turns=15,
+        max_tokens=8192,
     )
 
     # If the model produced analysis but no JSON, do a direct one-shot extraction call (no tools).
@@ -187,13 +188,28 @@ async def run_overseer(
         logger.info("Overseer produced no JSON — running direct extraction call")
         try:
             from .base import _extract_json, _is_anthropic
+            import re as _re
+
+            # Extract the JSON fragment from the accumulated text.
+            # When the model writes JSON across multiple turns, prose interruptions
+            # appear mid-JSON. Find the largest {…} span and pass that to the
+            # extraction model so it can reconstruct valid JSON.
+            json_fragment = result.text
+            m = _re.search(r"```json\s*(\{.*)", result.text, _re.DOTALL)
+            if m:
+                # Grab from the first { of the code block through the end of text
+                json_fragment = m.group(1).rstrip().rstrip("`").rstrip()
+            elif result.text.find("{") >= 0:
+                json_fragment = result.text[result.text.find("{"):]
 
             extraction_prompt = (
-                "You are a JSON formatter. Convert the portfolio analysis below into the required JSON schema.\n"
-                "Output ONLY valid JSON starting with { — no markdown fences, no preamble, no explanation.\n\n"
-                "ANALYSIS:\n"
-                f"{result.text}\n\n"
-                "REQUIRED SCHEMA:\n"
+                "You are a JSON formatter. The text below is a portfolio analysis that may contain "
+                "prose commentary mixed into a JSON block due to multi-turn generation.\n"
+                "Reconstruct a single valid JSON object using ONLY the structured data present.\n"
+                "Output ONLY valid JSON starting with { — no markdown fences, no preamble.\n\n"
+                "TEXT:\n"
+                f"{json_fragment[:30000]}\n\n"
+                "REQUIRED SCHEMA (keep all fields you can find, omit unknown ones):\n"
                 '{"market_overview":"...","portfolio_thesis":"...","verified_trades":[{"ticker":"...",'
                 '"asset_class":"stock","sector":"...","ml_signal":"BUY|HOLD",'
                 '"final_recommendation":"STRONG_BUY|BUY|HOLD|AVOID","conviction":"high|medium|low",'
@@ -207,14 +223,14 @@ async def run_overseer(
             if _is_anthropic(client):
                 resp = await client.messages.create(
                     model=model,
-                    max_tokens=4096,
+                    max_tokens=16384,
                     messages=[{"role": "user", "content": extraction_prompt}],
                 )
                 raw = "".join(b.text for b in resp.content if hasattr(b, "text"))
             else:
                 resp = await client.chat.completions.create(
                     model=model,
-                    max_tokens=4096,
+                    max_tokens=8192,
                     messages=[{"role": "user", "content": extraction_prompt}],
                 )
                 raw = resp.choices[0].message.content or ""

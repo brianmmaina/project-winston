@@ -4,11 +4,9 @@ import type { ReactElement } from "react";
 import {
   ApiClientError,
   getAgentAnalysisLatest,
-  getAgentDailyScan,
   triggerAgentAnalysis,
-  triggerDailyScan,
 } from "../api/client";
-import type { AgentAnalysisResult, BearParsed, BullDebateResult, BearRebuttalResult, CatalystParsed, DailyScan, OverseerParsed } from "../api/types.generated";
+import type { AgentAnalysisResult, BearParsed, BullDebateResult, BearRebuttalResult, CatalystParsed, OverseerParsed } from "../api/types.generated";
 import { BearCaseCard } from "../components/BearCaseCard";
 import { CatalystCard } from "../components/CatalystCard";
 import { OverseerCard } from "../components/OverseerCard";
@@ -31,81 +29,7 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-const HEALTH_COLOR: Record<string, string> = {
-  healthy: "border-secondary/30 bg-secondary/10 text-secondary",
-  some_concerns: "border-yellow-500/30 bg-yellow-500/10 text-yellow-400",
-  deteriorating: "border-error/30 bg-error/10 text-error",
-};
-const SEV_COLOR: Record<string, string> = {
-  high: "border-error/40 bg-error/10 text-error",
-  medium: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
-  low: "border-outline-variant text-on-surface-variant",
-};
-const ACTION_COLOR: Record<string, string> = {
-  exit: "text-error",
-  reduce: "text-yellow-400",
-  hold: "text-on-surface-variant",
-  add: "text-secondary",
-};
 
-function DailyScanSection({ scan, onRunScan, scanning }: { scan: DailyScan | null; onRunScan: () => void; scanning: boolean }) {
-  const sorted = [...(scan?.alerts ?? [])].sort((a, b) => {
-    const ord: Record<string, number> = { high: 0, medium: 1, low: 2 };
-    return (ord[a.severity] ?? 3) - (ord[b.severity] ?? 3);
-  });
-  return (
-    <div className="border border-outline-variant bg-surface-container">
-      <div className="px-4 py-3 border-b border-outline-variant flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <p className="font-mono text-[10px] font-bold tracking-[0.1em] uppercase text-on-surface-variant">Daily Scan</p>
-          {scan && (
-            <span className={`font-mono text-[9px] font-bold px-2 py-0.5 border ${HEALTH_COLOR[scan.portfolio_health] ?? "border-outline-variant text-on-surface-variant"}`}>
-              {scan.portfolio_health.replace("_", " ")}
-            </span>
-          )}
-          {scan?.scanned_at && (
-            <span className="font-mono text-[9px] text-on-surface-variant opacity-60">
-              {new Date(scan.scanned_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          disabled={scanning}
-          onClick={onRunScan}
-          className="flex items-center gap-1 px-3 py-1.5 border border-outline-variant text-on-surface-variant hover:text-on-surface font-mono text-[9px] font-bold uppercase tracking-[0.06em] transition-colors disabled:opacity-50"
-        >
-          <span className="material-symbols-outlined text-[12px] leading-none">refresh</span>
-          {scanning ? "Scanning…" : "Run Scan"}
-        </button>
-      </div>
-      {scan?.market_note && (
-        <div className="px-4 py-2.5 border-b border-outline-variant">
-          <p className="font-mono text-[11px] text-on-surface-variant leading-relaxed">{scan.market_note}</p>
-        </div>
-      )}
-      {sorted.length === 0 ? (
-        <div className="px-4 py-6 text-center font-mono text-[11px] text-on-surface-variant opacity-50">
-          {scan ? "No alerts" : "No scan data — run a scan to see alerts."}
-        </div>
-      ) : (
-        <div className="divide-y divide-outline-variant">
-          {sorted.map((a, i) => (
-            <div key={i} className="px-4 py-3 flex items-start gap-3">
-              <span className="font-mono text-[11px] font-bold text-on-surface shrink-0 w-14">{a.ticker}</span>
-              <span className={`font-mono text-[9px] font-bold px-1.5 py-0.5 border shrink-0 ${SEV_COLOR[a.severity] ?? ""}`}>{a.severity}</span>
-              <div className="flex-1 min-w-0">
-                <p className="font-mono text-[11px] text-on-surface">{a.alert}</p>
-                <p className="font-mono text-[10px] text-on-surface-variant opacity-70 mt-0.5">{a.rationale}</p>
-              </div>
-              <span className={`font-mono text-[10px] font-bold uppercase shrink-0 ${ACTION_COLOR[a.action] ?? ""}`}>{a.action}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 const VERDICT_COLOR: Record<string, string> = {
   CONFIRM_BUY: "text-secondary",
@@ -190,8 +114,6 @@ export default function AgentAnalysisPage(): ReactElement {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [triggerError, setTriggerError] = useState<string | null>(null);
   const [triggering, setTriggering] = useState(false);
-  const [dailyScan, setDailyScan] = useState<DailyScan | null>(null);
-  const [scanning, setScanning] = useState(false);
 
   const { job, isPolling, start: startJob } = useJob(2000);
 
@@ -208,20 +130,11 @@ export default function AgentAnalysisPage(): ReactElement {
     }
   }, []);
 
-  const fetchScan = useCallback(async () => {
-    try { setDailyScan(await getAgentDailyScan()); } catch { /* no scan yet */ }
-  }, []);
-
-  useEffect(() => { void fetchLatest(); void fetchScan(); }, [fetchLatest, fetchScan]);
+  useEffect(() => { void fetchLatest(); }, [fetchLatest]);
 
   useEffect(() => {
     if (job?.state === "completed") void fetchLatest();
   }, [job?.state, fetchLatest]);
-
-  const onRunScan = async () => {
-    setScanning(true);
-    try { await triggerDailyScan(); await fetchScan(); } catch { /* ignore */ } finally { setScanning(false); }
-  };
 
   const onRunAnalysis = async () => {
     setTriggerError(null);
@@ -287,8 +200,6 @@ export default function AgentAnalysisPage(): ReactElement {
           {loadError}
         </div>
       )}
-
-      <DailyScanSection scan={dailyScan} onRunScan={() => void onRunScan()} scanning={scanning} />
 
       {!result && !loadError && !isRunning && (
         <div className="border border-outline-variant bg-surface-container py-16 text-center">
